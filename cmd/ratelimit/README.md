@@ -201,6 +201,8 @@ Now we can alarm on this normalized metric
 
 ![RPS alarm](../../media/rps-alarm.png)
 
+Now you will be alarmed when ever you RPS exceeds the threshold you define!
+
 ## Testing / Code Coverage
 ### Running Tests
 To run the test cases locally before you deploy, you first need to make sure you have Go v1.22.1 or higher installed on your local machine.  If you do not, please refer to the [Prerequisites](#prerequisites) and follow the instructions. 
