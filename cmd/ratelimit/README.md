@@ -177,9 +177,29 @@ Natively in cloudwatch, you can create a "Metric Filter" on the `ERROR` keyword 
 
 #### Creating a Metric Filter (console)
 
-## Viewing Metrics
+## Creating an Alarm
 
-Work in progress..
+After deploying the solution, it will begin to track call counts for the events in scope.  By default it will track the following events : 
+- `AssumeRole`
+- `AssumeRoleWithWebIdentity`
+
+Navigate to the Cloudwatch Metric tab, you should see your namespace
+![Rate Limit Namepsace](../../media/rate-limit-namespace.png)
+
+In order to alarm on the metric you need to create new metric that is normalized over a span of time.  The `CallCount` metric is volume based, it purely tracks call counts.  In order to normalized and alarm, we need to make a metric with the following logic 
+
+```bash 
+e1 (new metric) = m1 / 60 #m1 is a reference variable to your call count metric
+
+# This will create a metric that is normalized and produces an RPS level metric
+```
+![Derived Metric](../../media/derived-metric.png)
+
+Now that we have that metric, you can give it a name such as ${EVENT_NAME}_RPS.  This represents your RPS over a minute time span.  
+
+Now we can alarm on this normalized metric
+
+![RPS alarm](../../media/rps-alarm.png)
 
 ## Testing / Code Coverage
 ### Running Tests

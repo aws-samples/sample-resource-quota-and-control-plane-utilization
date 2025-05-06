@@ -31,7 +31,6 @@ const (
 	logLevelEnv           = "LOG_LEVEL"
 	cloudwatchLogGroupEnv = "CLOUDWATCH_LOG_GROUP"
 	metricNamespaceEnv    = "METRIC_NAMESPACE"
-	appNameEnv            = "APP_NAME"
 
 	// error messages
 	cannotLoadEnvVar = "cannot load env var"
@@ -96,13 +95,6 @@ func main() {
 		HandleInitError(appLogger, errors.New(cannotLoadEnvVar))
 	}
 	appLogger.Info("loaded metric namespace env var %v", namespace)
-	// read the app name from the environment variable
-	appName := os.Getenv(appNameEnv)
-	// if the environment variable is not set, panic
-	if appName == "" {
-		HandleInitError(appLogger, errors.New(cannotLoadEnvVar))
-	}
-	appLogger.Info("loaded app name env var %v", appName)
 
 	ctx := context.Background()
 
@@ -155,7 +147,6 @@ func main() {
 		Flusher:    flusher,
 		CwlMap:     &cwlClientMap,
 		Namespace:  namespace,
-		AppName:    appName,
 		Logger:     appLogger,
 		HomeRegion: homeRegion,
 	})

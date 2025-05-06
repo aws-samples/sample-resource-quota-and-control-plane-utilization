@@ -24,7 +24,6 @@ const (
 	FlusherNilErrMsg       = "flusher is nil"
 	CwlClientMapNilErrMsg  = "cwl client map is nil"
 	NamspaceNotSetErrMsg   = "namespace is not set"
-	AppNameNotSetErrMsg    = "app name is not set"
 	HomeRegionNotSetErrMsg = "home region is not set"
 )
 
@@ -36,7 +35,6 @@ type RateLimitHandler struct {
 	EMFFusher    emf.EMFFusher
 	initialized  bool
 	Namespace    string
-	AppName      string // application name dimension
 	HomeRegion   string // region where the Lambda runs
 }
 
@@ -44,7 +42,6 @@ type RateLimitHandlerConfig struct {
 	CwlMap     *safemap.TypedMap[cwlclient.CloudWatchLogsClient]
 	Flusher    emf.EMFFusher
 	Namespace  string
-	AppName    string
 	HomeRegion string
 	Logger     logger.Logger
 }
@@ -82,14 +79,6 @@ func NewRateLimitHandler(
 		}, config.Logger)
 	}
 
-	// if app name is not set, throw error
-	if config.AppName == "" {
-		return nil, LogAndReturnError(sharedtypes.ErrorRecord{
-			Timestamp: time.Now(),
-			Err:       errors.New(AppNameNotSetErrMsg),
-		}, config.Logger)
-	}
-
 	// if home region is not set, throw error
 	if config.HomeRegion == "" {
 		return nil, LogAndReturnError(sharedtypes.ErrorRecord{
@@ -103,7 +92,6 @@ func NewRateLimitHandler(
 		Logger:       config.Logger,
 		EMFFusher:    config.Flusher,
 		Namespace:    config.Namespace,
-		AppName:      config.AppName,
 		HomeRegion:   config.HomeRegion,
 		initialized:  true,
 	}
@@ -200,21 +188,9 @@ func (rlh *RateLimitHandler) HandleEvent(
 
 	if len(failures) > 0 {
 		rlh.Logger.Info("Reporting %d failed message(s) for retry", len(failures))
-		// Emit batched error metric to home region
-		errorInput := emf.EMFInput{
-			Namespace:  rlh.Namespace,
-			MetricName: metricNameCallCount,
-			Value:      float64(len(failures)),
-			Unit:       metricUnitCount,
-			Dimensions: [][]string{{"AppName", rlh.AppName}},
-			Timestamp:  time.Now(),
-		}
-		if errRec, berr := emf.Build(errorInput, rlh.Logger); berr == nil {
-			if ferr := rlh.EMFFusher.Flush(ctx, rlh.HomeRegion, []emf.EMFRecord{errRec}); ferr != nil {
-				rlh.Logger.Error("Error flushing error-metric to region %s: %v", rlh.HomeRegion, ferr)
-			}
-		} else {
-			rlh.Logger.Error("Error building error-metric: %v", berr)
+		// loop through and a log all errors so they appear in cloudwatch logs
+		for _, f := range failures {
+			rlh.Logger.Error("Failed messageID=%s", f.ItemIdentifier)
 		}
 	} else {
 		rlh.Logger.Info("All messages flushed successfully, no failures")

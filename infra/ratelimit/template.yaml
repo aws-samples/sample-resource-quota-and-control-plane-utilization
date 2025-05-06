@@ -155,7 +155,6 @@ Resources:
           LOG_LEVEL: !Ref LogLevel
           CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
           METRIC_NAMESPACE: !Ref MetricNamespace
-          APP_NAME: !Ref AppName
       Events:
         SQSTrigger:
           Type: SQS
@@ -180,7 +179,6 @@ Resources:
           LOG_LEVEL: !Ref LogLevel
           CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
           METRIC_NAMESPACE: !Ref MetricNamespace
-          APP_NAME: !Ref AppName  
       Events:
         SQSTrigger2:
           Type: SQS
