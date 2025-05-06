@@ -6,7 +6,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
 	efsTypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
@@ -362,13 +361,13 @@ func TestCalculateENINau_InterfaceTypeWeights(t *testing.T) {
 	wt := NewWeightTable()
 	cases := []struct {
 		name          string
-		ifaceType     types.NetworkInterfaceType
+		ifaceType     ec2Types.NetworkInterfaceType
 		expectedUnits int64
 	}{
-		{"Lambda", types.NetworkInterfaceTypeLambda, int64(wt.Get(LambdaFunction))},
-		{"EFA", types.NetworkInterfaceTypeEfa, int64(wt.Get(EFAInterface))},
-		{"EFAOnly", types.NetworkInterfaceTypeEfaOnly, int64(wt.Get(EFAInterface))},
-		{"Branch", types.NetworkInterfaceTypeBranch, int64(wt.Get(EKSPod))},
+		{"Lambda", ec2Types.NetworkInterfaceTypeLambda, int64(wt.Get(LambdaFunction))},
+		{"EFA", ec2Types.NetworkInterfaceTypeEfa, int64(wt.Get(EFAInterface))},
+		{"EFAOnly", ec2Types.NetworkInterfaceTypeEfaOnly, int64(wt.Get(EFAInterface))},
+		{"Branch", ec2Types.NetworkInterfaceTypeBranch, int64(wt.Get(EKSPod))},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -376,7 +375,7 @@ func TestCalculateENINau_InterfaceTypeWeights(t *testing.T) {
 			ec2c := &ec2client.FakeEC2Client{
 				Region: "r1",
 				DescribeNetworkInterfacesPages: []*ec2.DescribeNetworkInterfacesOutput{{
-					NetworkInterfaces: []types.NetworkInterface{{
+					NetworkInterfaces: []ec2Types.NetworkInterface{{
 						InterfaceType: tc.ifaceType,
 						// No IPs or prefixes so only the type weight counts
 					}},
