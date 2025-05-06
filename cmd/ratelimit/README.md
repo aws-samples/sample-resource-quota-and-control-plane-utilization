@@ -174,11 +174,17 @@ Out of the box the solution will deploy the following resources on your behalf:
 ```
 
 ### Error Metrics
+#### Creating a Metric Filter (console)
 The solution uses a logger interface that will write `ERROR` logs to Cloudwatch Logs whenever there is a downstream I/O error and continue processing.  
 
 Natively in cloudwatch, you can create a "Metric Filter" on the `ERROR` keyword so that whenever cloudwatch gets errors logs, it will add to the error count metric.  This is what you should alarm on to signify there is some issue that needs attention from an administrator.  
 
-#### Creating a Metric Filter (console)
+In order to do this, you first need naviate to the log group that your lambda writes its application logs to and click `Metric Filters` tab then click `create metric filter`.
+
+![Metric Filter](../../media/metric-filter.png)
+
+From there you want to use the `ERROR` filter pattern which will match any error logs the solution produces.  On the next screen you give your metric a name and a namespace and you you will have the ability to create an alarm on this metric to signal that there was some downstream error that occured during processing! 
+
 
 ## Creating an Alarm
 
