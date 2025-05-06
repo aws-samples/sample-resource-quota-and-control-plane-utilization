@@ -1,0 +1,29 @@
+# Executibles 
+*.exe 
+*.exe~
+*.dill
+*.so
+*.dylib
+*.zip
+
+# Coverage tool output
+*.out
+*.html
+*.prof
+
+# Bin folders
+/bin/
+/build
+/_build
+/artifact
+cmd/eventgenerator
+
+# OS files
+*.DS_Store
+
+# VS Code
+*.vscode/
+
+# Local Development
+/internal/local_dev/
+Makefile

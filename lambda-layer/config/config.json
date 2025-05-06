@@ -1,0 +1,56 @@
+{
+  "services": {
+    "ec2": {
+      "quotaMetrics": [
+        {
+          "name": "networkInterfaces"
+        }
+      ]
+    },
+    "ebs" : { 
+      "quotaMetrics" : [
+        {
+          "name": "gp3storage"
+        }
+      ]
+    },
+    "iam": {
+      "quotaMetrics": [
+        {
+          "name": "oidcProviders"          
+        },
+        {
+          "name": "iamRoles"
+        }
+      ]
+    },
+    "vpc" :{ 
+      "quotaMetrics" : [
+        { 
+          "name": "nau"
+        }
+      ]
+    },
+    "eks" : { 
+      "quotaMetrics" : [
+        {
+          "name": "listClusters"
+        }
+      ]
+    },
+    "sts": {
+      "rateLimitAPIs": [
+        {
+          "name": "assumeRole"
+        },
+        {
+          "name": "assumeRoleWithWebIdentity"
+        }
+      ]
+    }
+  },
+  "regions": [
+    "us-east-1",
+    "us-west-2"
+  ]
+}

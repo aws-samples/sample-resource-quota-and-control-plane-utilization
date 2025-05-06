@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Timeout: 900              # 15 minutes
+    Architectures:
+      - arm64
+
+Parameters:
+  CloudWatchLogGroup: 
+    Type: String
+    Default: /lambda/resource-quota/emf
+    Description: CloudWatch Log Group for EMF
+  MetricNamespace:
+    Type: String
+    Default: Resource Quota Utilization
+    Description: Metric Namespace for various resource quota utilization metrics
+  LogLevel:
+    Type: String
+    Default: debug
+    Description: Log level for Lambda function logging
+  LambdaLayerPath:
+    Type: String
+    Default: /opt/config/config.json
+    Description: Path to Lambda layer config file
+
+
+Resources:
+
+  ## IAM Role for Lambda execution with necessary permissions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Enables CloudWatch Logs: CreateLogGroup / CreateLogStream / PutLogEvents
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ResourceQuotaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  # EC2
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeNatGateways
+                  - ec2:DescribeVpcEndpoints
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeTransitGatewayVpcAttachments
+                  - ec2:DescribeVpcs
+                  # EKS
+                  - eks:ListClusters
+                  # IAM
+                  - iam:ListOpenIDConnectProviders
+                  - iam:ListRoles
+                  # Support
+                  - support:RefreshTrustedAdvisorCheck
+                  # ELBv2
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  # EFS
+                  - elasticfilesystem:DescribeFileSystems
+                  - elasticfilesystem:DescribeMountTargets
+                  # CloudWatchLogs
+                  - logs:DescribeLogGroups
+                  - logs:CreateLogGroup
+                  - logs:DescribeLogStreams
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  # Service Quota
+                  - servicequotas:GetServiceQuota
+                Resource: '*'
+
+# Lambda Layer that stores the configuration for the solution
+  ConfigFileLambdaLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: resource-quota-config
+      Description: Configuration for resource quota utilization solution 
+      Content:
+        S3Bucket: custom-monitoring-poc
+        S3Key: layers/layer.zip
+      CompatibleArchitectures:
+        - arm64
+      CompatibleRuntimes:
+        - provided.al2023
+
+
+  ## Go Lambda function
+  ResourceQuotaFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: geras-resource-quota
+      CodeUri: ../../cmd/resourcequota                  # assumes your SAM template lives at your repo root
+      Handler: bootstrap                                # the name of your compiled binary
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Layers : 
+        - !Ref ConfigFileLambdaLayer
+      Environment:
+        Variables:
+          LAMBDA_LAYER_PATH: !Ref LambdaLayerPath         # if you load config from a Lambda Layer
+          CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
+          METRIC_NAMESPACE: !Ref MetricNamespace
+          LOG_LEVEL: !Ref LogLevel   
+
+      Events:
+        EveryFiveMinutes:
+          Type: Schedule
+          Properties:
+            Schedule: cron(*/5 * * * ? *)   # runs every 5 minutes
+            Enabled: true
+
+Outputs:
+  ResourceQuotaFunctionArn:
+    Description: "ARN of the ResourceQuota Lambda function"
+    Value: !GetAtt ResourceQuotaFunction.Arn

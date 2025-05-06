@@ -1,0 +1,204 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: |
+  EventBridge → SQS FIFO → 2 Go Lambdas 
+  • One FIFO queue, two EB rules → unique message groups 
+  • SQS EventSourceMappings with ReportBatchItemFailures 
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Timeout: 30
+    Architectures:
+      - arm64
+
+Parameters:
+  AssumeRoleHandler:
+    Type: String
+    Default: bootstrap
+    Description: Go handler for the AssumeRole function
+  AssumeWebIdentityHandler:
+    Type: String
+    Default: bootstrap
+    Description: Go handler for the AssumeRoleWithWebIdentity function
+  Regions:
+    Type: String
+    Default: us-east-1
+    Description: Comma separated list of regions to run solution against
+  LogLevel:
+    Type: String
+    Default: DEBUG
+    Description: Go log‐level for Lambda functions
+  CloudWatchLogGroup:
+    Type: String
+    Default: /lambda/ratelimit/emf
+    Description: CloudWatch log‐group for EMFs
+  MetricNamespace:
+    Type: String
+    Default: Rate Limit
+    Description: CloudWatch metric namespace
+
+
+Resources:
+
+  ### 1) FIFO Queue 
+  EventsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: events-queue.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      VisibilityTimeout: 30
+
+  ### 2) EventBridge Rules ###
+  AssumeRoleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: AssumeRoleRule
+      EventBusName: default
+      EventPattern:
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventName:
+            - AssumeRole
+      Targets:
+        - Id: ToSQS
+          Arn: !GetAtt EventsQueue.Arn
+          InputPath: "$.detail"
+          SqsParameters:
+            MessageGroupId: "assume-role-group"
+
+  AssumeRoleWebIdentityRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: AssumeRoleWithWebIdentityRule
+      EventBusName: default
+      EventPattern:
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventName:
+            - AssumeRoleWithWebIdentity
+      Targets:
+        - Id: ToSQS
+          Arn: !GetAtt EventsQueue.Arn
+          InputPath: "$.detail"
+          SqsParameters:
+            MessageGroupId: "assume-role-web-identity-group"
+
+  ### 3) Allow EventBridge to send to SQS ###
+  EventsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref EventsQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAssumeRole
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: 
+            - sqs:SendMessage
+            - sqs:SendMessageBatch
+            Resource: !GetAtt EventsQueue.Arn
+          - Sid: AllowAssumeRoleWeb
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: 
+            - sqs:SendMessage
+            - sqs:SendMessageBatch
+            Resource: !GetAtt EventsQueue.Arn
+
+  ### 4) IAM Role for Lambdas ###
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Basic CloudWatch Logs permissions
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+      Policies:
+        - PolicyName: DescribeLogResources
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: "*"
+
+  ### 5) Go Lambdas ###
+  AssumeRoleFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: AssumeRoleProcessor
+      Handler: !Ref AssumeRoleHandler
+      CodeUri: ../../cmd/ratelimit
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          REGIONS: !Ref Regions
+          LOG_LEVEL: !Ref LogLevel
+          CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
+          METRIC_NAMESPACE: !Ref MetricNamespace
+          APP_NAME: !Ref AppName
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt EventsQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  AssumeRoleWebIdentityFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: AssumeRoleWebIdentityProcessor
+      Handler: !Ref AssumeWebIdentityHandler
+      CodeUri: ../../cmd/ratelimit
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          REGIONS: !Ref Regions
+          LOG_LEVEL: !Ref LogLevel
+          CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
+          METRIC_NAMESPACE: !Ref MetricNamespace
+          APP_NAME: !Ref AppName  
+      Events:
+        SQSTrigger2:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt EventsQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+Outputs:
+  QueueUrl:
+    Description: URL of the FIFO queue
+    Value: !Ref EventsQueue
+
+  AssumeRoleFunctionArn:
+    Description: ARN of the AssumeRole Lambda
+    Value: !GetAtt AssumeRoleFunction.Arn
+
+  AssumeRoleWebIdentityFunctionArn:
+    Description: ARN of the AssumeRoleWithWebIdentity Lambda
+    Value: !GetAtt AssumeRoleWebIdentityFunction.Arn

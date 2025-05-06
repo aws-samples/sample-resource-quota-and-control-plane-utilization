@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Timeout: 900
+    Architectures:
+    - arm64
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+      - PolicyName: ResourceQuotaPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - ec2:DescribeNetworkInterfaces
+            - ec2:DescribeNatGateways
+            - ec2:DescribeVpcEndpoints
+            - ec2:DescribeSubnets
+            - ec2:DescribeTransitGatewayVpcAttachments
+            - ec2:DescribeVpcs
+            - eks:ListClusters
+            - iam:ListOpenIDConnectProviders
+            - iam:ListRoles
+            - support:RefreshTrustedAdvisorCheck
+            - elasticloadbalancing:DescribeLoadBalancers
+            - elasticfilesystem:DescribeFileSystems
+            - elasticfilesystem:DescribeMountTargets
+            - logs:DescribeLogGroups
+            - logs:CreateLogGroup
+            - logs:DescribeLogStreams
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - servicequotas:GetServiceQuota
+            Resource: '*'
+  ResourceQuotaFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+      SamResourceId: ResourceQuotaFunction
+    Properties:
+      FunctionName: geras-resource-quota
+      CodeUri: ResourceQuotaFunction
+      Handler: bootstrap
+      Role:
+        Fn::GetAtt:
+        - LambdaExecutionRole
+        - Arn
+      Layers:
+      - arn:aws:lambda:us-east-1:122820966793:layer:cmapp-config-layer:5
+      Environment:
+        Variables:
+          LAMBDA_LAYER_PATH: /opt/config/config.json
+      Events:
+        EveryFiveMinutes:
+          Type: Schedule
+          Properties:
+            Schedule: cron(*/5 * * * ? *)
+            Enabled: true
+Outputs:
+  ResourceQuotaFunctionArn:
+    Description: ARN of the ResourceQuota Lambda function
+    Value:
+      Fn::GetAtt:
+      - ResourceQuotaFunction
+      - Arn
