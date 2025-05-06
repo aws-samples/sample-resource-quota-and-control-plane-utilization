@@ -170,3 +170,20 @@ Once cloudformation has successfully deleted the stack, you may deploy your chan
 ## Viewing Metrics
 
 ## Testing / Code Coverage 
+### Running Tests
+To run the test cases locally before you deploy, you first need to make sure you have Go v1.22.1 or higher installed on your local machine.  If you do not, please refer to the [Prerequisites](#prerequisites) and follow the instructions. 
+
+```bash 
+# From the root directory of the project run the following command
+# This will produce a coverage report coverage.out file that we will 
+# render as html in the next step to view code coverage
+go test ./... -covermode=count -coverprofile=coverage.out
+```
+
+This will run the test cases for all packages that have *_test.go files.  If you see all "ok" messages on the output, then the tests have passed.  If not, you will see failure messages with the test name. 
+
+```bash 
+# next run the following command to generate an html file from the coverage report
+go tool cover -html=coverage.out -o coverage.html
+```
+This will produce a file named `coverage.html` in your root directory.  If you open this file in your browser you will see a code coverage report showing you for each file how much testing coverage it has.  
