@@ -12,7 +12,10 @@
 
 ## Overview
 
-The Rate Limit Monitoring solution captures control-plane API calls via EventBridge, routes them through a single SQS FIFO queue (with per-event “messageGroupId”s), and processes them in batches of 10 with a Go Lambda. Each batch is emitted as Embedded Metric Format (EMF) logs into CloudWatch Logs to create high-cardinality metrics.
+The Rate Limit Monitoring solution captures control-plane API calls via EventBridge, routes them through a single SQS FIFO queue (with per-event “messageGroupId”s), and processes them in batches of 10 with a Go Lambda. Each batch is emitted as Embedded Metric Format (EMF) logs into CloudWatch Logs to create custom metrics.
+
+## ⚠️ DISCLAIMER ⚠️
+This solution will begin to track events that match the event pattern and populate cloudwatch metrics once deployed.  Please be sure to be aware of any associated costs with deploying and running within your account.
 
 ## Configuration
 
