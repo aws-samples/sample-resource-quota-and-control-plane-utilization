@@ -5,7 +5,7 @@
 2. [Configuration](#configuration)
 3. [Deployment](#deployment)
 4. [Created Resources](#created-resources)
-5. [Viewing Metrics](#viewing-metrics)
+5. [Creating an Alarm](#creating-an-alarm)
 6. [Testing / Code Coverage](#testing--code-coverage)
 
 ![Architecture Diagram](../../media/rate-limit-solution.png)
