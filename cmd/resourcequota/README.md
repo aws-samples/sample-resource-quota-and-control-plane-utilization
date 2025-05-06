@@ -16,6 +16,9 @@ The Resource Quota Solution does the following :
 - gets the total allocation from Service Quotas api 
 - produces utilization % and send metric to cloudwatch logs via EMF (Embedded Metric Format)
 
+## ⚠️ DISCLAIMER ⚠️
+This solution will make various Describe* data plane calls to count resources to produce metrics.  Be aware of any costs associated with deploying and running in your account. 
+
 ## Configuration 
 
 This solution requires the following envionment variables
@@ -53,7 +56,7 @@ zip -r lambda-layer.zip . # This will produce a lambda-layer.zip file which cont
 config/ 
     config.json # This is the file lambda will read to initialize 
 ```
-Our sample config.json will look like what is shown below.  The structure of the config file a map of service names (ec2, ebs, iam etc).  Each map will contain an array of `quotaMetrics`.  This tells the solution will metrics it needs to capture.  These map to the metric we currently have coverage for.  As more metrics are added to the solution, we will update the config file accordingly. 
+Our sample config.json will look like what is shown below.  The structure of the config file is a map of service names (`ec2, ebs, iam` etc).  Each map will contain an array of `quotaMetrics`.  This tells the solution will metrics it needs to capture.  These map to the metric we currently have coverage for.  As more metrics are added to the solution, we will update the config file accordingly. 
 
 ```json 
 {
@@ -167,7 +170,22 @@ Once cloudformation has successfully deleted the stack, you may deploy your chan
 
 ## Created Resources
 
-## Viewing Metrics
+### Lambda 
+- Function will run on a cron schedule (5 mins by default)
+
+### EventBridge Trigger 
+- Cloudwatch events trigger of 5 minutes (default)
+
+## Creating an Alarm
+After deploying the solution and it running you should see your custom namespace when you click the `Metric` tab in cloudwatch. 
+
+![Metric Dashboard](../../media/metric-dashboard.png)
+
+From here you can set alarms on your metrics to alert you when it reaches a threshold you define. Below is an example using my networkInterfaces metric. 
+
+![Network Interface Alarm](../../media/networkInterfaces-alarm.png)
+
+From here you can define the threshold that meets your requirement.  Be sure to use the `Maximum` statisic.  This will ensure cloudwatch will use the maximum value over the given time period to alarm on. 
 
 ## Testing / Code Coverage 
 ### Running Tests

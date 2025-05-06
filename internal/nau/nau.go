@@ -116,37 +116,37 @@ func (c *calculator) CalculateVPCNAU(ctx context.Context) (map[string]int64, err
 			if v, err := c.calculateENINau(ctx, id); err != nil {
 				return nil, err
 			} else {
-				c.logger.Debug("  ENI NAU=%d", v)
+				c.logger.Debug("vpcId=%s ENI NAU=%d", id, v)
 				total += v
 			}
 			if v, err := c.calculateNATGatewayNau(ctx, id); err != nil {
 				return nil, err
 			} else {
-				c.logger.Debug("  NAT NAU=%d", v)
+				c.logger.Debug("vpcId=%s  NAT NAU=%d", id, v)
 				total += v
 			}
 			if v, err := c.calculateVPCEndpointsNau(ctx, id); err != nil {
 				return nil, err
 			} else {
-				c.logger.Debug("  VPC Endpoint NAU=%d", v)
+				c.logger.Debug("vpcId=%s  VPC Endpoint NAU=%d", id, v)
 				total += v
 			}
 			if v, err := c.calculateLoadBalancersNau(ctx, id); err != nil {
 				return nil, err
 			} else {
-				c.logger.Debug("  LB NAU=%d", v)
+				c.logger.Debug("vpcId=%s  LB NAU=%d", id, v)
 				total += v
 			}
 			if v, err := c.calculateTransitGatewayVpcAttachmentsNau(ctx, id); err != nil {
 				return nil, err
 			} else {
-				c.logger.Debug("  TGW-VPC Attach NAU=%d", v)
+				c.logger.Debug("vpcId=%s TGW-VPC Attach NAU=%d", id, v)
 				total += v
 			}
 			if v, err := c.calculateEFSMountTargetsInVpcNau(ctx, id); err != nil {
 				return nil, err
 			} else {
-				c.logger.Debug("  EFS-in-VPC NAU=%d", v)
+				c.logger.Debug("vpcId=%s  EFS-in-VPC NAU=%d", id, v)
 				total += v
 			}
 

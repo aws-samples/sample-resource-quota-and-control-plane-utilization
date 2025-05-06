@@ -521,10 +521,19 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 								Err:    err,
 							})
 						}
+						serviceQuotasClient, err := servicequotaclient.NewServiceQuotaClient(awsCfg, region)
+						if err != nil {
+							fatal(FatalInput{
+								Logger: log,
+								Msg:    ErrMsgCreateServiceQuotaClient,
+								Err:    err,
+							})
+						}
 						nauCalc := nau.NewCalculator(ec2c, efsC, elbC, log)
 						job, err := vpcnau.NewVPCNAUJob(vpcnau.VPCNAUConfig{
-							NauCalculator: nauCalc,
-							Logger:        log,
+							NauCalculator:       nauCalc,
+							ServiceQuotasClient: serviceQuotasClient,
+							Logger:              log,
 						})
 						if err != nil {
 							fatal(FatalInput{
