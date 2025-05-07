@@ -4,7 +4,7 @@
 2. [Configuration](#configuration)
 3. [Deployment](#deployment)
 4. [Created Resources](#created-resources)
-5. [Viewinng Metrics](#viewing-metrics)
+5. [Creating an Alarm](#creating-an-alarm)
 6. [Testing / Code Coverage](#testing--code-coverage)
 
 ![Architecture Diagram](../../media/resource-quota-solution.png)
@@ -117,9 +117,9 @@ Our sample config.json will look like what is shown below.  The structure of the
 }
 ```
 
-Finall you need to uploaded the resulting lambda-layer.zip file to an s3 bucket and keep track of the full URI as we will need to add it to the cloudformation template. 
+Finally you need to upload the resulting lambda-layer.zip file to an s3 bucket and keep track of the full path as we will need to add it to the cloudformation template. 
 
-2. Navigate to the Rate Limit infrastructure folder.  Ensure there is a template.yaml file located in that directory. 
+2. Navigate to the `infra/resourcequota` folder.  Ensure there is a template.yaml file located in that directory. 
 ```bash 
 root-dir/
         infra/
@@ -147,14 +147,14 @@ In the template.yaml you need to ensure you input your s3 bucket and key for the
 ```
 Save your changes 
 
-3. From that directory will run the commands below to build and deploy the application. 
+3. From the `infra/resourcequota` directory, run the commands below to build and deploy the application. 
 
 ```bash
 sam build
 sam deploy --guided
 ```
 
->Tip: Use sam deploy --guided on your first deployment to set a stack name and parameters.
+>Tip: Use sam deploy --guided on your first deployment 
 
 #### What if my stack creation fails? 
 If your stack creation fails, due to the nature of cloudformation, you will have to delete the stack before you can deploy it under the same name. 
@@ -166,7 +166,7 @@ aws cloudformation delete-stack --stack-name ### YOUR STACK NAME HERE
 # Wait for cloudformation to finish delete (optional)
 aws cloudformation wait stack-delete-complete --stack-name ### YOUR STACK NAME HERE
 ```
-Once cloudformation has successfully deleted the stack, you may deploy your changes using the sam build and sam deploy referenced earlier.
+Once cloudformation has successfully deleted the stack, you may deploy your changes using the sam build and sam deploy commands referenced earlier.
 
 ## Created Resources
 

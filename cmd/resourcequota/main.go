@@ -114,6 +114,8 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 	svcCfg := loadServiceConfig(LoadServiceConfigInput{
 		Logger: log,
 	})
+
+	// load aws config
 	awsCfg := loadAWSConfig(LoadAWSConfigInput{
 		Ctx:    ctx,
 		Logger: log,

@@ -46,7 +46,7 @@ This Lambda uses the following environment variables:
 git clone https://github.com/aws-samples/sample-resource-quota-and-control-plane-utilization
 ```
 
-2. Navigate to the Rate Limit infrastructure folder.  Ensure there is a template.yaml file located in that directory. 
+2. Navigate to the `infra/ratelimit` folder.  Ensure there is a template.yaml file located in that directory. 
 ```bash 
 root-dir/
         infra/
@@ -56,14 +56,14 @@ root-dir/
 
 
 
-3. From that directory will run the commands below to build and deploy the application. 
+3. From that directory, run the commands below to build and deploy the application. 
 
 ```bash
 sam build
 sam deploy --guided
 ```
 
->Tip: Use sam deploy --guided on your first deployment to set a stack name and parameters.
+>Tip: Use sam deploy --guided on your first deployment 
 
 #### What if my stack creation fails? 
 If your stack creation fails, due to the nature of cloudformation, you will have to delete the stack before you can deploy it under the same name. 
