@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -12,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf"
+	cloudtrailemfbatcher "github.com/outofoffice3/aws-samples/geras/internal/emfbatcher/cloudtrail"
 	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
 
 	"github.com/outofoffice3/aws-samples/geras/internal/handlers"
@@ -22,15 +25,22 @@ import (
 var (
 	RateLimitHandler *handlers.RateLimitHandler
 	logStreamName    = utils.MakeStreamName()
+	flusherInterval  time.Duration
 )
 
 const (
+
+	// known service variables
+	maxEvents = 10000
+	maxBytes  = 1 << 20
+	overhead  = 26
 
 	// environment variables
 	regionsEnv            = "REGIONS"
 	logLevelEnv           = "LOG_LEVEL"
 	cloudwatchLogGroupEnv = "CLOUDWATCH_LOG_GROUP"
 	metricNamespaceEnv    = "METRIC_NAMESPACE"
+	flushIntervalEnv      = "FLUSH_INTERVAL"
 
 	// error messages
 	cannotLoadEnvVar = "cannot load env var"
@@ -62,7 +72,7 @@ func main() {
 	// 3. Load a map of cloudwachlog clients per region
 
 	// Intialize the logger
-	logLevelValue := os.Getenv(logLevelEnv)
+	logLevelValue := strings.ToLower(os.Getenv(logLevelEnv))
 	var logLevel logger.LogLevel
 	switch logLevelValue {
 	case "debug":
@@ -106,12 +116,25 @@ func main() {
 	regions := strings.Split(rawRegions, ",")
 	appLogger.Info("loaded regions %v", regions)
 
+	rawInterval := os.Getenv(flushIntervalEnv)
+	if rawInterval == "" {
+		rawInterval = "45"
+		appLogger.Warn("flush interval not set, defaulting to 45 seconds")
+	}
+
+	secs, err := strconv.Atoi(rawInterval)
+	if err != nil {
+		HandleInitError(appLogger, err)
+	}
+	flusherInterval = time.Duration(secs) * time.Second
+	appLogger.Info("flush interval %v", flusherInterval)
+
 	// we need to make sure the log group and name are created
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		HandleInitError(appLogger, err)
 	}
-	homeRegion := cfg.Region // set home region
+
 	err = cwlclient.EnsureGroupAndStreamAcrossRegions(
 		ctx,
 		regions,
@@ -124,35 +147,49 @@ func main() {
 	}
 	appLogger.Info("log group and streams creating successfully in all regions")
 
-	// load a safemap of cloudwatch log clients for each region
-	var cwlClientMap safemap.TypedMap[cwlclient.CloudWatchLogsClient]
+	// load a safemap of cloudtrail emf batchers for each region
+	cwlClientMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
 	for _, region := range regions {
 		client, err := cwlclient.NewCloudWatchLogsClient(cfg, region)
 		if err != nil {
 			HandleInitError(appLogger, err)
 		}
+
+		// add client to map
 		cwlClientMap.Store(region, client)
-		appLogger.Info("loaded cloudwatch log client for region %s", region)
+		appLogger.Info("loaded cloudwatch client for region %s", region)
 	}
 
-	// create EMF Flusher
+	// create emf flusher
 	flusher := emf.NewEMFFlusher(emf.EMFFlusherConfig{
-		CwlClientMap:  &cwlClientMap,
-		LogGroupName:  cloudwatchLogGroup,
+		CwlClientMap:  cwlClientMap,
 		LogStreamName: logStreamName,
+		LogGroupName:  cloudwatchLogGroup,
+		Logger:        appLogger,
+	})
+
+	// create cloud trail flie batcher
+	cloudtrailFileBatcher := cloudtrailemfbatcher.NewCTFileBatcher(cloudtrailemfbatcher.CTFileBatcherConfig{
+		ParentCtx:     ctx,
+		Namespace:     namespace,
+		MetricName:    "CallCount",
+		BaseDir:       os.TempDir(),
+		MaxCount:      maxEvents,
+		MaxBytes:      maxBytes,
+		FlushInterval: flusherInterval,
+		EmfFlusher:    flusher,
 		Logger:        appLogger,
 	})
 
 	RateLimitHandler, err = handlers.NewRateLimitHandler(handlers.RateLimitHandlerConfig{
-		Flusher:    flusher,
-		CwlMap:     &cwlClientMap,
-		Namespace:  namespace,
-		Logger:     appLogger,
-		HomeRegion: homeRegion,
+		CloudTrailEmfFileBatcher: cloudtrailFileBatcher,
+		Namespace:                namespace,
+		Logger:                   appLogger,
 	})
 	if err != nil {
 		HandleInitError(appLogger, err)
 	}
+
 	appLogger.Info("initialization complete")
 	lambda.Start(HandleRequest)
 }

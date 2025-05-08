@@ -21,32 +21,98 @@ This solution will begin to track events that match the event pattern and popula
 
 This Lambda uses the following environment variables:
 
-> ** must be set or will cause runtime panic 
-
 
 | Name             | Description                                                                   | Default |
 |------------------|-------------------------------------------------------------------------------|---------|
-| **REGIONS          | Comma-separated list of AWS regions to run solution against (e.g.  us-east-1,us-west-2) |  us-east-1  |
+| REGIONS          | Comma-separated list of AWS regions to run solution against (e.g.  us-east-1,us-west-2) |  us-east-1  |
 | LOG_LEVEL        | Log verbosity (DEBUG, INFO, WARN, ERROR)                                      | INFO |
-| **LOG_GROUP_NAME   | CloudWatch Logs group name for EMF output                                     |  /lambda/ratelimit/emf  |
-| **METRIC_NAMESPACE | CloudWatch Metric Namespace                                                   |  Rate Limit |
+| LOG_GROUP_NAME   | CloudWatch Logs group name for EMF output                                     |  /lambda/ratelimit/emf  |
+| METRIC_NAMESPACE | CloudWatch Metric Namespace                                                   |  Rate Limit |
+| FLUSH_INTERVAL| Interval in seconds that lambda will flush emf records | 45
 
 ## Deployment
 
 ### Prerequisites
 
-- AWS CLI v2  
-- AWS SAM CLI (latest)  
-- Go v1.22.1 or higher (for local development)
-
+- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)  
+- [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) (latest)  
+- [Go v1.22.1](https://go.dev/doc/install) or higher (for local development) 
 ### Build & Deploy
 
-1. Clone the repository 
+The high level steps to fully deployment this solution are : 
+
+- [Cloning the repo ](#clone-the-repository)
+- [Building Lambda Extension](#deploying-lambda-extension)
+- [Deploy Cloudformation template](#deploying-the-cloudformation-template)
+
+#### Clone the repository 
 ```bash
 git clone https://github.com/aws-samples/sample-resource-quota-and-control-plane-utilization
 ```
 
-2. Navigate to the `infra/ratelimit` folder.  Ensure there is a template.yaml file located in that directory. 
+#### Deploying Lambda Extension 
+
+```bash 
+cmd/
+  emf-extension/      #This folder contains the entry point for the Lambda extension 
+              main.go 
+```
+
+We have a `Makefile` in the root directory that will handle: 
+- building the extension 
+- zipping it up properly based on lambda's requirements
+
+Afterward you will need to deploy the zip file to s3 and update the `template.yaml` to use the S3 bucket and object key.  Let walk through step by step 
+
+``` Makefile 
+# Makefile
+
+# Name of your extension executable under /opt/extensions
+EXT_NAME   := emf
+
+# Where to drop the compiled assets
+BUILD_DIR  := build
+EXT_DIR    := $(BUILD_DIR)/extensions
+BIN_PATH   := $(EXT_DIR)/$(EXT_NAME)
+
+# Path to your extension’s main.go
+SRC        := cmd/emf-extension/main.go
+
+.PHONY: all build package clean
+
+all: package
+
+# 1) Build the Linux/ARM64 binary under build/extensions/emf
+build:
+	mkdir -p $(EXT_DIR)
+	GOOS=linux GOARCH=arm64 go build -o $(BIN_PATH) $(SRC)
+	chmod +x $(BIN_PATH)
+
+# 2) Zip up the extensions/ tree so it contains:
+#    extensions/
+#    └── emf   ← your executable
+package: build
+	cd $(BUILD_DIR) && zip -r ../emf-extension.zip extensions
+
+clean:
+	rm -rf $(BUILD_DIR) *.zip
+
+```
+
+This `Makefile` exposes 3 commands: 
+- make build 
+- make package 
+- make clean 
+
+To prepare your lambda extension, first run `make clean` to make sure all older zip files are deleted from the root directory. 
+
+When ready to package it for s3, run `make package`, this will automatically run the build step and then it will package the extension into a zip file that aligns to Lambda's requirements. 
+
+Take the resulting .zip file and put into s3.  Make sure to keep track of the bucket name & object key, you will need it for the next step. 
+
+#### Deploying the Cloudformation Template 
+
+Navigate to the `infra/ratelimit` folder.  Ensure there is a template.yaml file located in that directory. 
 ```bash 
 root-dir/
         infra/
@@ -54,7 +120,19 @@ root-dir/
                     template.yaml
 ```
 
+Open the `template.yaml` file and input your s3 bucket name and object where the lambda layer is being created. 
 
+``` yaml 
+CloudTrailExtensionLayer: 
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: CloudTrailExtensionLayer
+      CompatibleRuntimes:
+        - provided.al2023
+      Content:
+        S3Bucket: ${YOUR_S3_BUCKET_NAME}  # overwrite with your s3 bucket name
+        S3Key: ${YOUR_LAYER_OBJECT_KEY}   # overwrite with your object key 
+```
 
 3. From that directory, run the commands below to build and deploy the application. 
 
@@ -84,6 +162,33 @@ Once cloudformation has successfully deleted the stack, you may deploy your chan
 Out of the box the solution will deploy the following resources on your behalf: 
 
 ### Event Bridge
+
+#### EventBridge Service Role 
+
+```yaml 
+EventBridgeDeliveryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowSQSSend
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:SendMessageBatch
+                Resource: !GetAtt EventsQueue.Arn
+```
+- This role is added to each event bridge target rule so that it can deliver the events to the targets specified 
+
 #### AssumeRole Event Rule 
 ```json 
 {
@@ -93,9 +198,9 @@ Out of the box the solution will deploy the following resources on your behalf:
   }
 }
 ```
-
 - Will send matching events to [AssumeRole Processor Lambda function](#assumeroleprocessor) using event-source mapping
 - Batch size = 10
+- Uses the [EventBridge Service Role](#eventbridge-service-role)
 
 #### AssumeRoleWithWebIdentityRules
 ```json 
@@ -108,6 +213,7 @@ Out of the box the solution will deploy the following resources on your behalf:
 ```
 - Will send matching events to [AssumeRoleWithWebIdentity Lambda function](#assumeroleprocessor) using event-source mapping
 - Batch size = 10 
+- Uses the [EventBridge Service Role](#eventbridge-service-role)
 
 ### SQS
 
@@ -184,6 +290,10 @@ In order to do this, you first need naviate to the log group that your lambda wr
 ![Metric Filter](../../media/metric-filter.png)
 
 From there you want to use the `ERROR` filter pattern which will match any error logs the solution produces.  On the next screen you give your metric a name and a namespace and you you will have the ability to create an alarm on this metric to signal that there was some downstream error that occured during processing! 
+
+##### Recommendation
+
+Create your Error metric in a unique namespace specific for the application.  Error Metrics are 1 dimensional so without this, they will collide with other error metrics that may exists in the namespace.  
 
 
 ## Creating an Alarm

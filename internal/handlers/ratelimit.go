@@ -4,46 +4,36 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
-	"github.com/outofoffice3/aws-samples/geras/internal/emf"
-	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
+	cloudtrailemfbatcher "github.com/outofoffice3/aws-samples/geras/internal/emfbatcher/cloudtrail"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 const (
-	metricNameCallCount = "CallCount"
-	metricUnitCount     = "Count"
 
 	// error msgs
-	FlusherNilErrMsg       = "flusher is nil"
-	CwlClientMapNilErrMsg  = "cwl client map is nil"
-	NamspaceNotSetErrMsg   = "namespace is not set"
-	HomeRegionNotSetErrMsg = "home region is not set"
+	CloudTrailEmfFileBatcherNillErrMsg = "cloudtrail emf file batcher is nil"
+	NamespaceNotSetErrMsg              = "namespace is not set"
+	StashNilErrMsg                     = "stash is nil"
 )
 
 // RateLimitHandler handles scheduled events from EventBridge
 // and batches EMF records to CloudWatch.
 type RateLimitHandler struct {
-	CwlClientMap *safemap.TypedMap[cwlclient.CloudWatchLogsClient]
-	Logger       logger.Logger
-	EMFFusher    emf.EMFFusher
-	initialized  bool
-	Namespace    string
-	HomeRegion   string // region where the Lambda runs
+	CloudTrailEmfFileBatcher cloudtrailemfbatcher.EMFFileBatcher
+	Logger                   logger.Logger
+	initialized              bool
+	Namespace                string
 }
 
 type RateLimitHandlerConfig struct {
-	CwlMap     *safemap.TypedMap[cwlclient.CloudWatchLogsClient]
-	Flusher    emf.EMFFusher
-	Namespace  string
-	HomeRegion string
-	Logger     logger.Logger
+	CloudTrailEmfFileBatcher cloudtrailemfbatcher.EMFFileBatcher
+	Namespace                string
+	Logger                   logger.Logger
 }
 
 // NewRateLimitHandler constructs a fully-initialized RateLimitHandler.
@@ -56,18 +46,10 @@ func NewRateLimitHandler(
 	}
 
 	// if client mpa is nil, throw error
-	if config.CwlMap == nil {
+	if config.CloudTrailEmfFileBatcher == nil {
 		return nil, LogAndReturnError(sharedtypes.ErrorRecord{
 			Timestamp: time.Now(),
-			Err:       errors.New(CwlClientMapNilErrMsg),
-		}, config.Logger)
-	}
-
-	// if flusher is nil. throw error
-	if config.Flusher == nil {
-		return nil, LogAndReturnError(sharedtypes.ErrorRecord{
-			Timestamp: time.Now(),
-			Err:       errors.New(FlusherNilErrMsg),
+			Err:       errors.New(CloudTrailEmfFileBatcherNillErrMsg),
 		}, config.Logger)
 	}
 
@@ -75,25 +57,16 @@ func NewRateLimitHandler(
 	if config.Namespace == "" {
 		return nil, LogAndReturnError(sharedtypes.ErrorRecord{
 			Timestamp: time.Now(),
-			Err:       errors.New(NamspaceNotSetErrMsg),
+			Err:       errors.New(NamespaceNotSetErrMsg),
 		}, config.Logger)
 	}
 
-	// if home region is not set, throw error
-	if config.HomeRegion == "" {
-		return nil, LogAndReturnError(sharedtypes.ErrorRecord{
-			Timestamp: time.Now(),
-			Err:       errors.New(HomeRegionNotSetErrMsg),
-		}, config.Logger)
-	}
 	// construct handler
 	rlh := &RateLimitHandler{
-		CwlClientMap: config.CwlMap,
-		Logger:       config.Logger,
-		EMFFusher:    config.Flusher,
-		Namespace:    config.Namespace,
-		HomeRegion:   config.HomeRegion,
-		initialized:  true,
+		CloudTrailEmfFileBatcher: config.CloudTrailEmfFileBatcher,
+		Logger:                   config.Logger,
+		Namespace:                config.Namespace,
+		initialized:              true,
 	}
 	rlh.Logger.Info("RateLimitHandler initialized")
 	return rlh, nil
@@ -105,98 +78,27 @@ func (rlh *RateLimitHandler) HandleEvent(
 	ctx context.Context,
 	event events.SQSEvent,
 ) ([]events.SQSBatchItemFailure, error) {
+	if !rlh.initialized {
+		return nil, errors.New("handler not initialized")
+	}
 	rlh.Logger.Info("Received %d records from SQS event", len(event.Records))
 
-	// entry pairs an EMFRecord with its original SQS MessageId
-	type entry struct {
-		msgID string
-		rec   emf.EMFRecord
-	}
-	byRegion := make(map[string][]entry)
+	var failures []events.SQSBatchItemFailure
 
-	// Convert and group by region
 	for _, msg := range event.Records {
-		rlh.Logger.Debug("Processing messageID=%s, message=%s", msg.MessageId, msg.Body)
 		var ctEvent sharedtypes.CloudTrailEvent
 		if err := json.Unmarshal([]byte(msg.Body), &ctEvent); err != nil {
-			LogAndReturnError(sharedtypes.ErrorRecord{
-				Timestamp: time.Now(),
-				Err:       err,
-			}, rlh.Logger)
+			rlh.Logger.Error("failed to unmarshal SQS message %s: %v", msg.MessageId, err)
+			failures = append(failures, events.SQSBatchItemFailure{ItemIdentifier: msg.MessageId})
 			continue
 		}
-		if ctEvent.AWSRegion == "" {
-			rlh.Logger.Warn("Message %s has no AWSRegion; skipping", msg.MessageId)
-			continue
-		}
-		emfRecord, err := emf.ConvertSQSMessageToEMF(ctx, msg,
-			rlh.Namespace, metricNameCallCount, metricUnitCount, [][]string{{"eventName", ctEvent.EventName}}, rlh.Logger)
-		if err != nil {
-			LogAndReturnError(sharedtypes.ErrorRecord{
-				Timestamp: time.Now(),
-				Err:       err,
-			}, rlh.Logger)
-			continue
-		}
-		byRegion[ctEvent.AWSRegion] = append(byRegion[ctEvent.AWSRegion], entry{msgID: msg.MessageId, rec: emfRecord})
-		rlh.Logger.Debug("Prepared EMFRecord for region=%s messageID=%s", ctEvent.AWSRegion, msg.MessageId)
-	}
 
-	if len(byRegion) == 0 {
-		rlh.Logger.Info("No valid EMFRecords to flush; exiting")
-		return nil, nil
-	}
-
-	// Channel to collect failed MessageIds (buffered to total records)
-	failCh := make(chan string, len(event.Records))
-
-	// Flush each region’s batch in parallel
-	var wg sync.WaitGroup
-	for region, entries := range byRegion {
-		wg.Add(1)
-		go func(region string, entries []entry) {
-			rlh.Logger.Info("Flushing %d records to region %s", len(entries), region)
-			defer wg.Done()
-			batch := make([]emf.EMFRecord, len(entries))
-			for i, e := range entries {
-				rlh.Logger.Debug("Flushing messageID=%s, message=%s", e.msgID, string(e.rec.Payload))
-				batch[i] = e.rec
-			}
-			if err := rlh.EMFFusher.Flush(ctx, region, batch); err != nil {
-				rlh.Logger.Error("Error flushing to region %s: %v", region, err)
-				// report per-record failures
-				for _, e := range entries {
-					failCh <- e.msgID
-				}
-			} else {
-				rlh.Logger.Info("Successfully flushed %d records to region %s", len(entries), region)
-				for _, e := range entries {
-					rlh.Logger.Debug("Successfully flushed messageID=%s", e.msgID)
-				}
-			}
-		}(region, entries)
-	}
-
-	wg.Wait()
-	close(failCh)
-
-	// Collect failures
-	var failures []events.SQSBatchItemFailure
-	for id := range failCh {
-		failures = append(failures, events.SQSBatchItemFailure{ItemIdentifier: id})
-	}
-
-	if len(failures) > 0 {
-		rlh.Logger.Info("Reporting %d failed message(s) for retry", len(failures))
-		// loop through and a log all errors so they appear in cloudwatch logs
-		for _, f := range failures {
-			rlh.Logger.Error("Failed messageID=%s", f.ItemIdentifier)
-		}
-	} else {
-		rlh.Logger.Info("All messages flushed successfully, no failures")
+		rlh.CloudTrailEmfFileBatcher.Add(ctx, ctEvent.AWSRegion, ctEvent)
+		rlh.Logger.Debug("added CloudTrail event to file batcher for region %s, message %s", ctEvent.AWSRegion, msg.MessageId)
 	}
 
 	return failures, nil
+
 }
 
 // LogAndReturnError centralizes error logging

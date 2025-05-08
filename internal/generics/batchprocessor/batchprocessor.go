@@ -19,13 +19,22 @@ type GenericBatchProcessor[I any, O any] struct {
 	MaxBatchBytes int
 	FlushInterval time.Duration
 
-	MapFunc   func(I) (O, error)
-	ItemSizer func(O) int
-	FlushFunc func(ctx context.Context, batch []O) error
+	MapFunc    func(I) (O, error)
+	ItemSizer  func(O) int
+	FlushFunc  func(ctx context.Context, batch []O) error
+	AfterFlush func(flushed []O)
 
 	in     chan I
 	wg     *sync.WaitGroup
 	Logger applogger.Logger
+}
+
+type GenericOption[I any, O any] func(*GenericBatchProcessor[I, O])
+
+func WithAfterFlush[I any, O any](f func([]O)) GenericOption[I, O] {
+	return func(p *GenericBatchProcessor[I, O]) {
+		p.AfterFlush = f
+	}
 }
 
 // NewGenericBatchProcessor creates and starts a GenericBatchProcessor.
@@ -38,6 +47,7 @@ func NewGenericBatchProcessor[I any, O any](
 	flushFunc func(ctx context.Context, batch []O) error,
 	itemSizer func(O) int,
 	logger applogger.Logger,
+	opts ...GenericOption[I, O],
 ) *GenericBatchProcessor[I, O] {
 	if logger == nil {
 		logger = &applogger.NoopLogger{}
@@ -53,6 +63,12 @@ func NewGenericBatchProcessor[I any, O any](
 		wg:            &sync.WaitGroup{},
 		Logger:        logger,
 	}
+
+	// apply options
+	for _, opt := range opts {
+		opt(p)
+	}
+
 	p.wg.Add(1)
 	go p.start(ctx)
 	// log the type of the batch
@@ -85,6 +101,10 @@ func (p *GenericBatchProcessor[I, O]) start(ctx context.Context) {
 		err := p.FlushFunc(ctx, batch)
 		if err != nil {
 			HandleError(err, p.Logger)
+		}
+		if p.AfterFlush != nil {
+			p.AfterFlush(batch)
+			p.Logger.Info("after flush hook called")
 		}
 		batch = make([]O, 0, p.MaxBatchSize)
 		currentBytes = 0
@@ -138,7 +158,7 @@ func (p *GenericBatchProcessor[I, O]) start(ctx context.Context) {
 // Add enqueues one item of type I.
 func (p *GenericBatchProcessor[I, O]) Add(item I) {
 	p.in <- item
-	p.Logger.Debug("item added to buffer %#v")
+	p.Logger.Debug("item added to buffer %#v", item)
 }
 
 // Wait closes the input channel and blocks until all background work

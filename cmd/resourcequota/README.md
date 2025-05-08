@@ -23,6 +23,8 @@ This solution will make various Describe* data plane calls to count resources to
 
 This solution requires the following envionment variables
 
+### Environment Variables
+
 | Name             | Description                                                                   | Default |
 |------------------|-------------------------------------------------------------------------------|---------|
 | LOG_LEVEL        | Log verbosity (DEBUG, INFO, WARN, ERROR)                                      | INFO |
@@ -30,20 +32,111 @@ This solution requires the following envionment variables
 | **METRIC_NAMESPACE | CloudWatch Metric Namespace                                                   |  Resource Quota Utilization |
 | LAMBDA_LAYER_PATH | path to the location of the config.json file in the lambda layer.  If you made any changes to the lambda layer. You need to make sure to update this variable accordingly. | /opt/config/config.json |
 
+### Config File
+
+Here is an example of the config file shape that we require.  It is a map of service names such as `ec2, eks, iam, vpc` etc.  Each will have an array of `quotaMetrics`.  This is how we know which metrics you want to capture.  
+
+```json 
+{
+  "services": {
+    "ec2": {
+      "quotaMetrics": [
+        {
+          "name": "networkInterfaces"
+        }
+      ]
+    },
+    "ebs" : { 
+      "quotaMetrics" : [
+        {
+          "name": "gp3storage"
+        }
+      ]
+    },
+    "iam": {
+      "quotaMetrics": [
+        {
+          "name": "oidcProviders"          
+        },
+        {
+          "name": "iamRoles"
+        }
+      ]
+    },
+    "vpc" :{ 
+      "quotaMetrics" : [
+        { 
+          "name": "nau"
+        }
+      ]
+    },
+    "eks" : { 
+      "quotaMetrics" : [
+        {
+          "name": "listClusters"
+        }
+      ]
+    },
+    "sts": {
+      "rateLimitAPIs": [
+        {
+          "name": "assumeRole"
+        },
+        {
+          "name": "assumeRoleWithWebIdentity"
+        }
+      ]
+    }
+  },
+  "regions": [
+    "us-east-1",
+    "us-west-2"
+  ]
+}
+```
+
+### Valid Metrics per serice 
+
+We will add mmore metrics based on customer feedback but below is what we have converage for today. 
+
+``` bash 
+- ec2 
+  - networkInterfaces
+- eks 
+  - listClusters
+- vpc 
+  - nau
+- iam 
+  - iamRoles
+  - oidcProviders
+- ebs
+  - gp3Storage
+```
+
+#### ⚠️ Attention⚠️
+For the `iamRoles` and `gp3Storage` metric, we use the Support API to perform `RefreshTrustedAdvisorCheck` against the Trusted Advisor service.  You need at least business support for this metric to work, if not, the solution will throw a 404 exception but it will continue to calculate other metrics.
+
 ## Deployment 
 
 ### Prerequisites
 
-- AWS CLI v2  
-- AWS SAM CLI (latest)  
-- Go v1.22.1 or higher (for local development)
+- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)  
+- [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) (latest)  
+- [Go v1.22.1](https://go.dev/doc/install) or higher (for local development)
 
 ### Build & Deploy
 
-1. Clone the repository 
+The high level steps to fully deploy this solution are: 
+- [Cloning the repo](#clone-the-repository)
+- [Building the Lambda Layer](#building-the-lamdba-layer)
+- [Deploying the Cloudformation Tempate](#deploying-the-cloudformation-template)
+
+### Clone the repository 
 ```bash
 git clone https://github.com/aws-samples/sample-resource-quota-and-control-plane-utilization
 ```
+
+### Building the Lamdba Layer
 
 We need to make sure the lambda layer is uploaded to S3 prior to deployment, so that when we deploy the cloudformation template, it will pull the layer.zip from s3. 
 
@@ -119,7 +212,9 @@ Our sample config.json will look like what is shown below.  The structure of the
 
 Finally you need to upload the resulting lambda-layer.zip file to an s3 bucket and keep track of the full path as we will need to add it to the cloudformation template. 
 
-2. Navigate to the `infra/resourcequota` folder.  Ensure there is a template.yaml file located in that directory. 
+#### Deploying the Cloudformation Template
+
+Navigate to the `infra/resourcequota` folder.  Ensure there is a template.yaml file located in that directory. 
 ```bash 
 root-dir/
         infra/

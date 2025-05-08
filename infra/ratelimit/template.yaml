@@ -27,7 +27,7 @@ Parameters:
     Description: Comma separated list of regions to run solution against
   LogLevel:
     Type: String
-    Default: DEBUG
+    Default: debug
     Description: Go log‐level for Lambda functions
   CloudWatchLogGroup:
     Type: String
@@ -37,6 +37,10 @@ Parameters:
     Type: String
     Default: Rate Limit
     Description: CloudWatch metric namespace
+  FlushInterval:
+    Type: String
+    Default : "45"
+    Description: Interval in seconds for flushing emf records  
 
 
 Resources:
@@ -68,6 +72,7 @@ Resources:
           InputPath: "$.detail"
           SqsParameters:
             MessageGroupId: "assume-role-group"
+          RoleArn: !GetAtt  EventBridgeDeliveryRole.Arn
 
   AssumeRoleWebIdentityRule:
     Type: AWS::Events::Rule
@@ -86,6 +91,7 @@ Resources:
           InputPath: "$.detail"
           SqsParameters:
             MessageGroupId: "assume-role-web-identity-group"
+          RoleArn: !GetAtt  EventBridgeDeliveryRole.Arn
 
   ### 3) Allow EventBridge to send to SQS ###
   EventsQueuePolicy:
@@ -155,6 +161,9 @@ Resources:
           LOG_LEVEL: !Ref LogLevel
           CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
           METRIC_NAMESPACE: !Ref MetricNamespace
+          FLUSH_INTERVAL: !Ref FlushInterval
+      Layers: 
+      - !Ref CloudTrailExtensionLayer
       Events:
         SQSTrigger:
           Type: SQS
@@ -179,6 +188,9 @@ Resources:
           LOG_LEVEL: !Ref LogLevel
           CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
           METRIC_NAMESPACE: !Ref MetricNamespace
+          FLUSH_INTERVAL: !Ref FlushInterval
+      Layers: 
+      - !Ref CloudTrailExtensionLayer
       Events:
         SQSTrigger2:
           Type: SQS
@@ -187,6 +199,38 @@ Resources:
             BatchSize: 10
             FunctionResponseTypes:
               - ReportBatchItemFailures
+
+  CloudTrailExtensionLayer: 
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: CloudTrailExtensionLayer
+      CompatibleRuntimes:
+        - provided.al2023
+      Content:
+        S3Bucket: custom-monitoring-poc
+        S3Key: layers/emf-extension.zip 
+  
+  EventBridgeDeliveryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowSQSSend
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:SendMessageBatch
+                Resource: !GetAtt EventsQueue.Arn
+
 
 Outputs:
   QueueUrl:

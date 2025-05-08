@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	metricUnitCount = "Count"
+	MetricUnitCount = "Count"
 
 	// error messages
 	noClientFoundForRegionErr = "no client found for region"
@@ -101,18 +101,18 @@ func ConvertSQSMessageToEMF(ctx context.Context, msg events.SQSMessage,
 	timestamp := ctEvent.EventTime
 
 	lowerCaseUnit := strings.ToLower(unit)
-	lowerCaseMetricNameCount := strings.ToLower(metricUnitCount)
+	lowerCaseMetricNameCount := strings.ToLower(MetricUnitCount)
 	switch lowerCaseUnit {
 	case lowerCaseMetricNameCount:
 		{
 			applogger.Debug("Metric unit is %s for %s metric ", unit, metricName)
-			unit = metricUnitCount
+			unit = MetricUnitCount
 		}
 	default:
 		{
 			applogger.Warn("Unknown metric unit %s for %s metric", unit, metricName)
 			applogger.Warn("Defaulting to Count")
-			unit = metricUnitCount
+			unit = MetricUnitCount
 		}
 	}
 
@@ -135,7 +135,7 @@ func logAndReturnError(err error, applogger logger.Logger) error {
 }
 
 // EMFFusher knows how to send a batch of EMF records to Cloudwatch
-type EMFFusher interface {
+type EMFFlusher interface {
 	Flush(ctx context.Context, region string, batch []EMFRecord) error
 }
 
@@ -154,7 +154,7 @@ type EMFFlusherConfig struct {
 	Logger        logger.Logger
 }
 
-func NewEMFFlusher(config EMFFlusherConfig) EMFFusher {
+func NewEMFFlusher(config EMFFlusherConfig) EMFFlusher {
 	return &EMFFlusherImpl{
 		CwlClientMap:  config.CwlClientMap,
 		LogStreamName: config.LogStreamName,
@@ -168,6 +168,7 @@ func (efi *EMFFlusherImpl) Flush(ctx context.Context, region string, batch []EMF
 		efi.Logger.Info("batch empty for %s region", region)
 		return nil
 	}
+	efi.Logger.Info("flushing %d records to %s region; logroup %s logstream %s", len(batch), region, efi.LogGroupName, efi.LogStreamName)
 	client, ok := efi.CwlClientMap.Load(region)
 	if !ok {
 		return fmt.Errorf(noClientFoundForRegionErr+" %s", region)
@@ -195,6 +196,6 @@ func (efi *EMFFlusherImpl) Flush(ctx context.Context, region string, batch []EMF
 	if err != nil {
 		return err
 	}
-
+	efi.Logger.Info("successfully flushed %d records to %s region; logroup %s logstream %s", len(batch), region, efi.LogGroupName, efi.LogStreamName)
 	return nil
 }

@@ -1,141 +1,184 @@
-package handlers_test
+// internal/handlers/ratelimit_test.go
+package handlers
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/outofoffice3/aws-samples/geras/internal/emf"
-	"github.com/outofoffice3/aws-samples/geras/internal/handlers"
-	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 	"github.com/stretchr/testify/assert"
+
+	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
-// mockLogger implements logger.Logger with no-op methods
-type mockLogger struct{}
+//––– Mocks –––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
 
-func (l *mockLogger) Info(format string, args ...interface{})  {}
-func (l *mockLogger) Debug(format string, args ...interface{}) {}
-func (l *mockLogger) Error(format string, args ...interface{}) {}
-func (l *mockLogger) Warn(format string, args ...interface{})  {}
-
-// stubFusher implements emf.EMFFusher
-type stubFusher struct {
-	failRegions map[string]bool
-}
-
-func (s *stubFusher) Flush(ctx context.Context, region string, batch []emf.EMFRecord) error {
-	if s.failRegions != nil && s.failRegions[region] {
-		return errors.New("flush error")
+// fakeBatcher records calls to Add(...)
+type fakeBatcher struct {
+	mu    sync.Mutex
+	calls []struct {
+		region string
+		event  sharedtypes.CloudTrailEvent
 	}
-	return nil
 }
 
-// makeSQSEvent creates an SQSEvent with given regions and timestamps
-func makeSQSEvent(regions []string, times []time.Time) events.SQSEvent {
-	records := make([]events.SQSMessage, len(regions))
-	for i, region := range regions {
-		evt := sharedtypes.CloudTrailEvent{
-			AWSRegion: region,
-			EventTime: times[i],
-		}
-		body, _ := json.Marshal(evt)
-		records[i] = events.SQSMessage{
-			MessageId: region + "-id",
-			Body:      string(body),
-		}
-	}
-	return events.SQSEvent{Records: records}
+func (f *fakeBatcher) Add(_ context.Context, region string, ct sharedtypes.CloudTrailEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, struct {
+		region string
+		event  sharedtypes.CloudTrailEvent
+	}{region, ct})
 }
-func TestHandleEvent_NoRecords(t *testing.T) {
-	handler := &handlers.RateLimitHandler{
-		Logger:    &mockLogger{},
-		EMFFusher: &stubFusher{},
-		Namespace: "ns",
-	}
-	failures, err := handler.HandleEvent(context.Background(), events.SQSEvent{Records: []events.SQSMessage{}})
-	assert.NoError(t, err, "No error expected for empty record set")
-	assert.Nil(t, failures, "Failures should be nil when no records")
+
+// testLogger captures Error(...) messages
+type testLogger struct {
+	mu      sync.Mutex
+	errMsgs []string
 }
+
+func (l *testLogger) Error(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errMsgs = append(l.errMsgs, fmt.Sprintf(format, args...))
+}
+func (l *testLogger) Info(format string, args ...interface{})  {}
+func (l *testLogger) Debug(format string, args ...interface{}) {}
+func (l *testLogger) Warn(format string, args ...interface{})  {}
+
+//––– Tests ––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+
+func TestNewRateLimitHandler_Errors(t *testing.T) {
+	fake := &fakeBatcher{}
+	// nil batcher
+	_, err := NewRateLimitHandler(RateLimitHandlerConfig{
+		CloudTrailEmfFileBatcher: nil,
+		Namespace:                "ns",
+	})
+	assert.Error(t, err, "nil batcher should error")
+
+	// empty namespace
+	_, err = NewRateLimitHandler(RateLimitHandlerConfig{
+		CloudTrailEmfFileBatcher: fake,
+		Namespace:                "",
+	})
+	assert.Error(t, err, "empty namespace should error")
+}
+
+func TestNewRateLimitHandler_Success(t *testing.T) {
+	fake := &fakeBatcher{}
+	h, err := NewRateLimitHandler(RateLimitHandlerConfig{
+		CloudTrailEmfFileBatcher: fake,
+		Namespace:                "ns",
+		// omit Logger to exercise default
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, h)
+}
+
+func TestHandleEvent_NotInitialized(t *testing.T) {
+	// zero value handler: initialized=false
+	h := &RateLimitHandler{}
+	failures, err := h.HandleEvent(context.Background(), events.SQSEvent{})
+	assert.Error(t, err)
+	assert.Nil(t, failures)
+}
+
+func TestHandleEvent_EmptyRecords(t *testing.T) {
+	fake := &fakeBatcher{}
+	h, _ := NewRateLimitHandler(RateLimitHandlerConfig{
+		CloudTrailEmfFileBatcher: fake,
+		Namespace:                "ns",
+	})
+	failures, err := h.HandleEvent(context.Background(), events.SQSEvent{Records: nil})
+	assert.NoError(t, err)
+	assert.Empty(t, failures)
+	assert.Empty(t, fake.calls)
+}
+
 func TestHandleEvent_InvalidJSON(t *testing.T) {
-	handler := &handlers.RateLimitHandler{
-		Logger:    &mockLogger{},
-		EMFFusher: &stubFusher{},
-		Namespace: "ns",
-	}
-	now := time.Now()
-	validEvt := sharedtypes.CloudTrailEvent{AWSRegion: "us-east-1", EventTime: now}
-	validBody, _ := json.Marshal(validEvt)
-	sqsEvent := events.SQSEvent{
-		Records: []events.SQSMessage{
-			{MessageId: "bad-id", Body: "not-json"},
-			{MessageId: "us-east-1-id", Body: string(validBody)},
-		},
-	}
-	failures, err := handler.HandleEvent(context.Background(), sqsEvent)
-	assert.NoError(t, err, "No error expected when skipping invalid JSON")
-	assert.Empty(t, failures, "All valid records should flush successfully")
+	fake := &fakeBatcher{}
+	h, _ := NewRateLimitHandler(RateLimitHandlerConfig{
+		CloudTrailEmfFileBatcher: fake,
+		Namespace:                "ns",
+	})
+	input := events.SQSEvent{Records: []events.SQSMessage{
+		{MessageId: "msg-1", Body: "not-json"},
+	}}
+	failures, err := h.HandleEvent(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Len(t, failures, 1)
+	assert.Equal(t, "msg-1", failures[0].ItemIdentifier)
+	assert.Empty(t, fake.calls)
 }
-func TestHandleEvent_FlushSuccessSingle(t *testing.T) {
-	now := time.Now()
-	sqsEvent := makeSQSEvent([]string{"us-west-2"}, []time.Time{now})
-	handler := &handlers.RateLimitHandler{
-		Logger:    &mockLogger{},
-		EMFFusher: &stubFusher{},
-		Namespace: "ns",
+
+func TestHandleEvent_ValidJSON(t *testing.T) {
+	fake := &fakeBatcher{}
+	h, _ := NewRateLimitHandler(RateLimitHandlerConfig{
+		CloudTrailEmfFileBatcher: fake,
+		Namespace:                "ns",
+	})
+
+	now := time.Now().UTC().Truncate(time.Second)
+	cte := sharedtypes.CloudTrailEvent{
+		AWSRegion: "r1", EventName: "e1", EventTime: now,
 	}
-	failures, err := handler.HandleEvent(context.Background(), sqsEvent)
-	assert.NoError(t, err, "No error expected when flush succeeds")
-	assert.Empty(t, failures, "No failures expected on successful flush")
+	payload, _ := json.Marshal(cte)
+
+	input := events.SQSEvent{Records: []events.SQSMessage{
+		{MessageId: "msg-2", Body: string(payload)},
+	}}
+	failures, err := h.HandleEvent(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Empty(t, failures)
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	assert.Len(t, fake.calls, 1)
+	assert.Equal(t, "r1", fake.calls[0].region)
+	assert.Equal(t, cte, fake.calls[0].event)
 }
-func TestHandleEvent_FlushFailureSingle(t *testing.T) {
-	now := time.Now()
-	sqsEvent := makeSQSEvent([]string{"us-west-2"}, []time.Time{now})
-	handler := &handlers.RateLimitHandler{
-		Logger:    &mockLogger{},
-		EMFFusher: &stubFusher{failRegions: map[string]bool{"us-west-2": true}},
-		Namespace: "ns",
+
+func TestHandleEvent_Mixed(t *testing.T) {
+	fake := &fakeBatcher{}
+	h, _ := NewRateLimitHandler(RateLimitHandlerConfig{
+		CloudTrailEmfFileBatcher: fake,
+		Namespace:                "ns",
+	})
+
+	now := time.Now().UTC().Truncate(time.Second)
+	cte := sharedtypes.CloudTrailEvent{
+		AWSRegion: "rX", EventName: "eX", EventTime: now,
 	}
-	failures, err := handler.HandleEvent(context.Background(), sqsEvent)
-	assert.NoError(t, err, "Handler should not return error, only failures list")
-	assert.Len(t, failures, 1, "One failure expected for the single message")
-	assert.Equal(t, "us-west-2-id", failures[0].ItemIdentifier)
+	validJSON, _ := json.Marshal(cte)
+
+	input := events.SQSEvent{Records: []events.SQSMessage{
+		{MessageId: "bad", Body: "xxx"},
+		{MessageId: "good", Body: string(validJSON)},
+	}}
+	failures, err := h.HandleEvent(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Len(t, failures, 1)
+	assert.Equal(t, "bad", failures[0].ItemIdentifier)
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	assert.Len(t, fake.calls, 1)
+	assert.Equal(t, "rX", fake.calls[0].region)
 }
-func TestHandleEvent_MultipleRegionsMixed(t *testing.T) {
-	now := time.Now()
-	regions := []string{"us-east-1", "us-west-2"}
-	times := []time.Time{now, now}
-	sqsEvent := makeSQSEvent(regions, times)
-	handler := &handlers.RateLimitHandler{
-		Logger: &mockLogger{},
-		EMFFusher: &stubFusher{failRegions: map[string]bool{
-			"us-west-2": true,
-		}},
-		Namespace: "ns",
-	}
-	failures, err := handler.HandleEvent(context.Background(), sqsEvent)
-	assert.NoError(t, err, "Handler should not return error even when some flushes fail")
-	// Only us-west-2-id should be retried
-	ids := []string{failures[0].ItemIdentifier}
-	assert.ElementsMatch(t, []string{"us-west-2-id"}, ids)
-}
-func TestHandleEvent_ConvertFailureSkipsAll(t *testing.T) {
-	handler := &handlers.RateLimitHandler{
-		Logger:    &mockLogger{},
-		EMFFusher: &stubFusher{},
-		Namespace: "ns",
-	}
-	// all invalid JSON => no conversions, byRegion empty => early exit
-	sqsEvent := events.SQSEvent{
-		Records: []events.SQSMessage{
-			{MessageId: "id1", Body: "not-json"},
-			{MessageId: "id2", Body: "also-not-json"},
-		},
-	}
-	failures, err := handler.HandleEvent(context.Background(), sqsEvent)
-	assert.NoError(t, err, "No error expected when all conversion fails")
-	assert.Nil(t, failures, "Failures should be nil when no records are flushed")
+
+func TestLogAndReturnError(t *testing.T) {
+	tl := &testLogger{}
+	errIn := errors.New("boom")
+	errOut := LogAndReturnError(errIn, tl)
+	assert.Same(t, errIn, errOut)
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	// should have logged "Handler error: boom"
+	assert.Contains(t, tl.errMsgs[0], "Handler error: boom")
 }

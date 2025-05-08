@@ -35,6 +35,7 @@ func NewCloudTrailEMFBatcher(
 	logGroup string,
 	logStream string,
 	logger applogger.Logger,
+	opts ...batchprocessor.GenericOption[sharedtypes.CloudTrailEvent, sharedtypes.EMFRecord],
 ) (*CloudTrailEventEMFBatcher, error) {
 	// check if logger is nil
 	// if so add the noop logger
@@ -87,8 +88,9 @@ func NewCloudTrailEMFBatcher(
 		flushFn,
 		sizeFn,
 		logger,
+		opts...,
 	)
-	logger.Info(pkgPrefix, "new batch processor")
+	logger.Info("%s new batch processor", pkgPrefix)
 	// Return batcher
 	return &CloudTrailEventEMFBatcher{
 		Batcher: b,

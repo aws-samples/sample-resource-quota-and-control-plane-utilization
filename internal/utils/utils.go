@@ -37,11 +37,14 @@ func IsValidRegion(region string) bool {
 }
 
 const (
-	LogStreamTimeLayout = "20060102-150405" // YYYYMMDD-HHMMSS
+	LogStreamTimeLayout = "2006/01/02/15/04/05.000"
 )
 
 func MakeStreamName() string {
-	host, _ := os.Hostname()                           // get hostname
-	ts := time.Now().UTC().Format(LogStreamTimeLayout) // format current time
+	if name := os.Getenv("AWS_LAMBDA_LOG_STREAM_NAME"); name != "" {
+		return name
+	}
+	host, _ := os.Hostname()
+	ts := time.Now().UTC().Format(LogStreamTimeLayout)
 	return fmt.Sprintf("%s-%s", ts, host)
 }

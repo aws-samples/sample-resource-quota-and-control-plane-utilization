@@ -28,4 +28,3 @@ cmd/eventgenerator
 
 # Local Development
 /internal/local_dev/
-Makefile
