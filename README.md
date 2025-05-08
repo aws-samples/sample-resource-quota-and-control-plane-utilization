@@ -10,7 +10,7 @@ This repository contains two complementary, serverless Go projects following AWS
 1. **Rate Limit Monitor** 
   An **event-driven** pipeline that captures control-plane API call rates and publishes CallCount metric to Cloudwatch in real-time.
   
-    Pattern: EventBridge → SQS FIFO (single queue, per-rule message groups) → Lambda (batch of 10) → EMF in CloudWatch Logs.
+    Pattern: EventBridge → SQS FIFO (single queue, per-rule message groups) → Lambda (batch of 10) → EMF in CloudWatch Logs (in batches).
 
 
 2. **Resource Quota Utilization** 
@@ -32,20 +32,22 @@ This repository contains two complementary, serverless Go projects following AWS
 
 ---
 ## Repo Folder Structure
-```bash
-cmd / ## entry point location for each project
-    ratelimit/
-            main.go ## entry point for rate limit solution
-    resourcequota/
-            main.go ## entry point for resource quota solution
-infra / ## folder for cloudformation templates to deploy solution 
-      ratelimit/
-              template.yaml # cloudformation template for rate limit solution
-      resourcequota
-              template.yaml # cloudformation template for resource quota solution 
-internal/   # folder for internal libraries useds
-lambda-layer/ # directory where lambda layer is stored
 
+```bash
+cmd / # entry point location for each project
+    emf-extension/      # lambda extension   
+            main.go 
+    ratelimit/          # rate limit solution
+            main.go 
+    resourcequota/      # resource quota solution
+            main.go 
+infra / # folder for cloudformation templates 
+      ratelimit/        # rate limit solution
+              template.yaml 
+      resourcequota     # resource quota solution
+              template.yaml 
+internal/   # folder for internal libraries useds
+lambda-layer/ # directory for lambda layer
 ```
 
 ## Architecture Diagrams
@@ -54,6 +56,7 @@ lambda-layer/ # directory where lambda layer is stored
 ### Rate Limit Monitor 
 ![Rate Limit Architecture](media/rate-limit-solution.png)
 
+--------
 
 ### Resource Quota Utilization 
 ![Resource Quota Architecture](media/resource-quota-solution.png)
