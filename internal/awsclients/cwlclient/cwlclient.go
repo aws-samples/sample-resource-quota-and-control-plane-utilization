@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	cwlTypes "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/outofoffice3/aws-samples/geras/internal/utils"
 )
 
@@ -95,6 +96,11 @@ func EnsureLogGroupExists(ctx context.Context, client CloudWatchLogsClient, grou
 	if _, err := client.CreateLogGroup(ctx, &cloudwatchlogs.CreateLogGroupInput{
 		LogGroupName: &groupName,
 	}); err != nil {
+		var existsErr *cwlTypes.ResourceAlreadyExistsException
+		var abortedErr *cwlTypes.OperationAbortedException
+		if errors.As(err, &existsErr) || errors.As(err, &abortedErr) {
+			return nil // race condition—group was created by XXXXXXX process
+		}
 		return fmt.Errorf("[%s] create log group %q: %w", client.GetRegion(), groupName, err)
 	}
 	return nil
@@ -123,6 +129,11 @@ func EnsureLogStreamExists(ctx context.Context, client CloudWatchLogsClient, gro
 		LogGroupName:  &groupName,
 		LogStreamName: &streamName,
 	}); err != nil {
+		var existsErr *cwlTypes.ResourceAlreadyExistsException
+		var abortedErr *cwlTypes.OperationAbortedException
+		if errors.As(err, &existsErr) || errors.As(err, &abortedErr) {
+			return nil // race condition—group was created by XXXXXXX process
+		}
 		return fmt.Errorf("[%s] create log stream %q: %w", client.GetRegion(), streamName, err)
 	}
 	return nil

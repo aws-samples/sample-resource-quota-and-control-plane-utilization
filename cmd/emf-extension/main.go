@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	"slices"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf"
@@ -27,7 +29,11 @@ import (
 )
 
 const (
-	logLevelEnvVar = "LOG_LEVEL"
+	logLevelEnvVar        = "LOG_LEVEL"
+	regionsEnvVar         = "REGIONS"
+	cloudwatchGroupEnvVar = "CLOUDWATCH_LOG_GROUP"
+
+	ErrMsgCannotLoadEnvVar = "cannot load environment variable"
 )
 
 var (
@@ -58,6 +64,39 @@ func main() {
 	log.Debug(printPrefix+" log level set to %s", logLevelValue)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	awsCfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Error(printPrefix+" load AWS config failed: %v", err)
+		os.Exit(1)
+	}
+
+	// read the environment variables to get the regions
+	rawRegions := os.Getenv(regionsEnvVar)
+	if rawRegions == "" {
+		HandleInitError(log, errors.New(ErrMsgCannotLoadEnvVar))
+	}
+	regions := strings.Split(rawRegions, ",")
+	log.Info(printPrefix+" regions %s", regions)
+	logGroup := os.Getenv(cloudwatchGroupEnvVar)
+
+	if logGroup == "" {
+		log.Error(printPrefix + " cloudwatch log group not set")
+		os.Exit(1)
+	}
+
+	logStreamName := utils.MakeStreamName()
+	err = cwlclient.EnsureGroupAndStreamAcrossRegions(
+		ctx,
+		regions,
+		logGroup,
+		logStreamName,
+		makeFactory(awsCfg),
+	)
+	if err != nil {
+		HandleInitError(log, err)
+	}
+	log.Info(printPrefix+" log group and streams created across all regions %s", regions)
+
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
@@ -71,17 +110,12 @@ func main() {
 	stashDir := os.TempDir()
 	files, err := filepath.Glob(filepath.Join(stashDir, "emf_*.ndjson"))
 	if err != nil {
-		log.Error("glob failed: %v", err)
+		log.Error(printPrefix+" glob failed: %v", err)
 		os.Exit(1)
 	}
 	log.Debug(printPrefix+" found %d files in %s", len(files), stashDir)
 
 	// b) build per-region CWL client map
-	awsCfg, err := config.LoadDefaultConfig(context.Background())
-	if err != nil {
-		log.Error(printPrefix+" load AWS config failed: %v", err)
-		os.Exit(1)
-	}
 	cwlMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
 	for _, f := range files {
 		region := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "emf_"), ".ndjson")
@@ -95,11 +129,7 @@ func main() {
 	}
 
 	// c) create EMF flusher
-	logGroup := os.Getenv("CLOUDWATCH_LOG_GROUP")
-	if logGroup == "" {
-		log.Error(printPrefix + " CLOUDWATCH_LOG_GROUP not set")
-		os.Exit(1)
-	}
+
 	log.Debug(printPrefix+" cloudwatch log group set to %s", logGroup)
 	flusher := emf.NewEMFFlusher(emf.EMFFlusherConfig{
 		CwlClientMap:  cwlMap,
@@ -130,7 +160,7 @@ func main() {
 			defer wg.Done()
 			f, err := os.Open(path)
 			if err != nil {
-				log.Error(printPrefix+"open %s: %v", path, err)
+				log.Error(printPrefix+" open %s: %v", path, err)
 				return
 			}
 			defer f.Close()
@@ -169,13 +199,13 @@ func processEvents(ctx context.Context, log logger.Logger) {
 		case <-ctx.Done():
 			return
 		default:
-			log.Info(printPrefix + " Waiting for event...")
+			log.Debug(printPrefix + " Waiting for event...")
 			res, err := extensionClient.NextEvent(ctx)
 			if err != nil {
-				println(printPrefix, "Error:", err)
+				log.Error(printPrefix, "Error:", err)
 				return
 			}
-			log.Info(printPrefix+" Received event: %s", prettyPrint(res))
+			log.Debug(printPrefix+" Received event: %s", prettyPrint(res))
 			if res.EventType == extension.Shutdown {
 				log.Info(printPrefix + " Received SHUTDOWN event")
 				return
@@ -187,4 +217,21 @@ func processEvents(ctx context.Context, log logger.Logger) {
 func prettyPrint(v any) string {
 	data, _ := json.MarshalIndent(v, "", "\t")
 	return string(data)
+}
+
+// Handle Init Error
+func HandleInitError(logger logger.Logger, err error) {
+	logger.Error(printPrefix+" error initializing service: %v", err)
+	os.Exit(1)
+}
+
+func makeFactory(cfg aws.Config) cwlclient.ClientFactory {
+	return func(region string) (cwlclient.CloudWatchLogsClient, error) {
+		cfg.Region = region
+		client, err := cwlclient.NewCloudWatchLogsClient(cfg, region)
+		if err != nil {
+			return nil, err
+		}
+		return client, nil
+	}
 }
