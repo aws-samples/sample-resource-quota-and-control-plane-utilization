@@ -114,11 +114,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	println(printPrefix, "Register response:", prettyPrint(res))
+	log.Info(printPrefix+"Register response: %v", prettyPrint(res))
 
 	// ── 2) PROCESS EVENTS UNTIL SHUTDOWN ──────────────────────────────────
-	processEvents(ctx)
-	log.Debug(printPrefix + " processEvents() returned, SHUTDOWN")
+	processEvents(ctx, log)
+	log.Info(printPrefix + " processEvents() returned, SHUTDOWN")
 
 	// ── 3) ON SHUTDOWN, FLUSH ALL STASH FILES ─────────────────────────────
 	files, _ = filepath.Glob(filepath.Join(os.TempDir(), "emf_*.ndjson"))
@@ -160,24 +160,24 @@ func main() {
 		}(path)
 	}
 	wg.Wait()
-	println(printPrefix, "Flush complete, exiting")
+	log.Info(printPrefix + " flush complete, exiting")
 }
 
-func processEvents(ctx context.Context) {
+func processEvents(ctx context.Context, log logger.Logger) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			println(printPrefix, "Waiting for event...")
+			log.Info(printPrefix + " Waiting for event...")
 			res, err := extensionClient.NextEvent(ctx)
 			if err != nil {
 				println(printPrefix, "Error:", err)
 				return
 			}
-			println(printPrefix, "Received event:", prettyPrint(res))
+			log.Info(printPrefix+" Received event: %s", prettyPrint(res))
 			if res.EventType == extension.Shutdown {
-				println(printPrefix, "Received SHUTDOWN event")
+				log.Info(printPrefix + " Received SHUTDOWN event")
 				return
 			}
 		}

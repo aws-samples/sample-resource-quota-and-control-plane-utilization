@@ -41,9 +41,6 @@ const (
 )
 
 func MakeStreamName() string {
-	if name := os.Getenv("AWS_LAMBDA_LOG_STREAM_NAME"); name != "" {
-		return name
-	}
 	host, _ := os.Hostname()
 	ts := time.Now().UTC().Format(LogStreamTimeLayout)
 	return fmt.Sprintf("%s-%s", ts, host)
