@@ -72,7 +72,7 @@ func NewGenericBatchProcessor[I any, O any](
 	p.wg.Add(1)
 	go p.start(ctx)
 	// log the type of the batch
-	logger.Info("%T successfully started", p)
+	logger.Debug("%T successfully started", p)
 	return p
 }
 
@@ -95,7 +95,7 @@ func (p *GenericBatchProcessor[I, O]) start(ctx context.Context) {
 	// flush sends the batch and resets state
 	flush := func() {
 		if len(batch) == 0 {
-			p.Logger.Info("nothing to flush")
+			p.Logger.Debug("nothing to flush")
 			return
 		}
 		err := p.FlushFunc(ctx, batch)
@@ -104,7 +104,7 @@ func (p *GenericBatchProcessor[I, O]) start(ctx context.Context) {
 		}
 		if p.AfterFlush != nil {
 			p.AfterFlush(batch)
-			p.Logger.Info("after flush hook called")
+			p.Logger.Debug("after flush hook called")
 		}
 		batch = make([]O, 0, p.MaxBatchSize)
 		currentBytes = 0

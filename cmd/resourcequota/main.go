@@ -101,6 +101,8 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 			Err:    fmt.Errorf("cloudwatch log group is not set"),
 		})
 	}
+	log.Info("loaded cloudwatch log group env var %s", cloudwatchLogGroup)
+
 	namespace := os.Getenv(metricNamespaceEnv)
 	if namespace == "" {
 		fatal(FatalInput{
@@ -109,11 +111,13 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 			Err:    fmt.Errorf("metric namespace is not set"),
 		})
 	}
+	log.Info("loaded metric namespace env var %s", namespace)
 
 	// load service configuration from lambda layer
 	svcCfg := loadServiceConfig(LoadServiceConfigInput{
 		Logger: log,
 	})
+	log.Info("loaded service config from lamdbda layer %+v", *svcCfg)
 
 	// load aws config
 	awsCfg := loadAWSConfig(LoadAWSConfigInput{
@@ -133,7 +137,9 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 		Logger:              log,
 	})
 
-	// create metric emf metric batchers for sending metrics to cloudwatch logs as EMF to reach region
+	// create metric emf metric batchers
+	// it will convert cloudwatch metrics to EMF
+	// and send them to cloudwatch logs
 	regionalBatchers, regionalChans := initMetricBatchers(InitMetricBatchersInput{
 		Ctx:       ctx,
 		AwsCfg:    awsCfg,
@@ -142,10 +148,11 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 		LogStream: cloudWatchLogStream,
 		Namespace: namespace,
 		Logger:    log,
-	},
-	)
+	})
+	log.Info("initialized cloudwatch metric batchers")
 
 	// build job manager
+	// this will start the go routine worker pool which will process jobs in parallel
 	jobMgr := buildJobManager(BuildJobManagerInput{
 		Ctx:           ctx,
 		AwsCfg:        awsCfg,
@@ -154,6 +161,7 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 		Services:      svcCfg.Services,
 		Logger:        log,
 	})
+	log.Info("built job manager")
 
 	// initialize handler
 	handler := initResourceQuotaHandler(InitResourceQuotaHandlerInput{
@@ -166,6 +174,7 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 		ServiceConfig:                    svcCfg,
 		Logger:                           log,
 	})
+	log.Info("initialized resource quota handler")
 
 	// handle event
 	if err := handler.HandleEvent(ctx, event); err != nil {
@@ -235,7 +244,6 @@ func loadAWSConfig(input LoadAWSConfigInput) aws.Config {
 			Err:    err,
 		})
 	}
-	log.Info("home region: %s", cfg.Region)
 	return cfg
 }
 
@@ -370,6 +378,7 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 							})
 						}
 						jm.AddJob(job)
+						log.Info("added network interfaces job for region %s to job manager", region)
 					}
 				}
 
@@ -406,6 +415,7 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 							})
 						}
 						jm.AddJob(job)
+						log.Info("added list clusters job for region %s to job manager", region)
 					}
 				}
 
@@ -442,6 +452,7 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 							})
 						}
 						jm.AddJob(job)
+						log.Info("added oidc providers job for region %s to job manager", region)
 					}
 					if qm.Name == "iamRoles" {
 						log.Info("creating IAM Roles job for region %s", region)
@@ -465,6 +476,7 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 							})
 						}
 						jm.AddJob(job)
+						log.Info("added iam Roles job for region %s to job manager", region)
 					}
 				}
 
@@ -492,13 +504,14 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 							})
 						}
 						jm.AddJob(job)
+						log.Info("added gp3 storage job for region %s to job manager", region)
 					}
 				}
 
 			case "vpc":
 				for _, qm := range svcCfg.QuotaMetrics {
 					if qm.Name == "nau" {
-						log.Info("creating VPC NAU job for region %s", region)
+						log.Info("creating vpc nau job for region %s", region)
 						ec2c, err := ec2client.NewEc2Client(awsCfg, region)
 						if err != nil {
 							fatal(FatalInput{
@@ -545,6 +558,7 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 							})
 						}
 						jm.AddJob(job)
+						log.Info("added vpc nau job for region %s to job manager", region)
 					}
 				}
 			}

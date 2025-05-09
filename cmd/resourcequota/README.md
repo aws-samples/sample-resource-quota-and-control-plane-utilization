@@ -266,10 +266,11 @@ Once cloudformation has successfully deleted the stack, you may deploy your chan
 ## Created Resources
 
 ### Lambda 
-- Function will run on a cron schedule (5 mins by default)
+- Function Name : `geras-resource-quota`
+- Memory : `128 MB`
 
 ### EventBridge Trigger 
-- Cloudwatch events trigger of 5 minutes (default)
+- Schedule:  `5 minutes` (default)
 
 ### Error Metrics
 #### Creating a Metric Filter (console)

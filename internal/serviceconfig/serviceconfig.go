@@ -220,6 +220,6 @@ func ValidateQuotaMetricConfig(cfg TopLevelServiceConfig, logger applogger.Logge
 			logger.Warn("no quota config for service %s", serviceName)
 		}
 	}
-	logger.Info("quota config validated")
+	logger.Debug("quota metric config validated")
 	return nil
 }

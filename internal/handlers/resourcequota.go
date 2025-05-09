@@ -99,14 +99,14 @@ func (h *ResourceQuotaHandler) HandleEvent(ctx context.Context, event events.Clo
 
 	h.JobManager.Wait() // wait for all jobs to complete
 	h.Logger.Info("all jobs completed")
-	h.Logger.Info("waiting for cloudtrail emf batchers to complete")
+	h.Logger.Info("waiting for cloudwatch metric batchers to complete")
 	// wait for each cloudwatch metric batcher to complete
 	// use the range function for safemap to wait for each batcher to commplete
 	h.RegionalCloudwatchMetricBatchers.Range(func(key string, value metricemfbatcher.CloudWatchMetricBatcher) bool {
 		value.Batcher.Wait()
 		return true
 	})
-	h.Logger.Info("cloudwatch emf batchers completed in all regions")
+	h.Logger.Info("cloudwatch metric emf batchers completed in all regions")
 	h.Logger.Info("resource handler completed")
 	return nil
 }

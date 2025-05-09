@@ -44,6 +44,7 @@ func NewCloudTrailEMFBatcher(
 	}
 	// MapFunc: CloudTrailEvent → EMFRecord
 	mapFn := func(ev sharedtypes.CloudTrailEvent) (sharedtypes.EMFRecord, error) {
+		logger.Debug(pkgPrefix+"mapping CloudTrailEvent to EMFRecord; CloudTrailEvent=%v", ev)
 		now := ev.EventTime.UnixMilli()
 		emf := map[string]any{
 			"_aws": map[string]any{
@@ -61,6 +62,7 @@ func NewCloudTrailEMFBatcher(
 		if err != nil {
 			return sharedtypes.EMFRecord{}, err
 		}
+		logger.Debug(pkgPrefix+"mapped CloudTrailEvent to EMFRecord; EMFRecord=%v", string(data))
 		return sharedtypes.EMFRecord{Payload: data, Timestamp: now}, nil
 	}
 
@@ -90,7 +92,7 @@ func NewCloudTrailEMFBatcher(
 		logger,
 		opts...,
 	)
-	logger.Info("%s new batch processor", pkgPrefix)
+	logger.Debug("%s new batch processor", pkgPrefix)
 	// Return batcher
 	return &CloudTrailEventEMFBatcher{
 		Batcher: b,

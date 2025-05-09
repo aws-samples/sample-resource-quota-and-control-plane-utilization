@@ -97,8 +97,21 @@ func TestCalculateLoadBalancersNau(t *testing.T) {
 	elbc := &elbv2client.FakeELBV2Client{
 		DescribeOutputs: []*elbv2.DescribeLoadBalancersOutput{{
 			LoadBalancers: []elbv2Types.LoadBalancer{
-				{Type: elbv2Types.LoadBalancerTypeEnumNetwork, VpcId: aws.String("vpc-1"), AvailabilityZones: []elbv2Types.AvailabilityZone{{ZoneName: aws.String("us-west-2a")}}},
-				{Type: elbv2Types.LoadBalancerTypeEnumGateway, VpcId: aws.String("vpc-1"), AvailabilityZones: []elbv2Types.AvailabilityZone{{ZoneName: aws.String("us-west-2b")}, {ZoneName: aws.String("us-west-2c")}}},
+				{
+					Type:            elbv2Types.LoadBalancerTypeEnumNetwork,
+					LoadBalancerArn: aws.String("test-arn"),
+					VpcId:           aws.String("vpc-1"),
+					AvailabilityZones: []elbv2Types.AvailabilityZone{
+						{
+							ZoneName: aws.String("us-west-2a")}}},
+				{
+					Type:            elbv2Types.LoadBalancerTypeEnumGateway,
+					LoadBalancerArn: aws.String("test-arn2"),
+					VpcId:           aws.String("vpc-1"),
+					AvailabilityZones: []elbv2Types.AvailabilityZone{
+						{
+							ZoneName: aws.String("us-west-2b")}, {
+							ZoneName: aws.String("us-west-2c")}}},
 			},
 		}},
 		ErrorOnCall: -1,
@@ -145,8 +158,9 @@ func TestCalculateVPCNAU_Happy(t *testing.T) {
 			{
 				LoadBalancers: []elbv2Types.LoadBalancer{
 					{
-						Type:  elbv2Types.LoadBalancerTypeEnumNetwork,
-						VpcId: aws.String("vpc-1"),
+						Type:            elbv2Types.LoadBalancerTypeEnumNetwork,
+						LoadBalancerArn: aws.String("test-arn"),
+						VpcId:           aws.String("vpc-1"),
 						AvailabilityZones: []elbv2Types.AvailabilityZone{
 							{
 								ZoneName: aws.String("a")}}}}}},

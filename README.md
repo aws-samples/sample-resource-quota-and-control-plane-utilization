@@ -26,9 +26,6 @@ This repository contains two complementary, serverless Go projects following AWS
     - total oidc providers
     - total EKS Clusters
     - total iam roles
-   
-
-
 
 ---
 ## Repo Folder Structure

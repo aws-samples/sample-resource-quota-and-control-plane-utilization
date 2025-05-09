@@ -57,7 +57,7 @@ func MakeFlushFunc[T any](
 			return fmt.Errorf(pkgPrefix+"error flushing batch: %w", err)
 		}
 
-		logger.Info(pkgPrefix+"flushed batch "+"batchSize : %v , logGroup : %v , logStream : %v", len(batch), logGroup, logStream)
+		logger.Debug(pkgPrefix+"flushed batch "+"batchSize : %v , logGroup : %v , logStream : %v", len(batch), logGroup, logStream)
 		return nil
 	}
 }

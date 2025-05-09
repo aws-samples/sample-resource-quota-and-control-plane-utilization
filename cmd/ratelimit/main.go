@@ -23,9 +23,10 @@ import (
 )
 
 var (
-	RateLimitHandler *handlers.RateLimitHandler
-	logStreamName    = utils.MakeStreamName()
-	flusherInterval  time.Duration
+	RateLimitHandler    *handlers.RateLimitHandler
+	logStreamName       = utils.MakeStreamName()
+	flusherInterval     time.Duration
+	metricNameCallCount = "CallCount"
 )
 
 const (
@@ -43,7 +44,8 @@ const (
 	flushIntervalEnv      = "FLUSH_INTERVAL"
 
 	// error messages
-	cannotLoadEnvVar = "cannot load env var"
+	ErrMsgCannotLoadEnvVar  = "cannot load env var"
+	ErrMsgServiceInitFailed = "failed to initialize service"
 )
 
 func HandleRequest(ctx context.Context, event events.SQSEvent) (events.SQSEventResponse, error) {
@@ -94,47 +96,48 @@ func main() {
 
 	// read the environment variables
 	cloudwatchLogGroup := os.Getenv(cloudwatchLogGroupEnv)
-	// if the environment variable is not set, panic
+	// if the environment variable is not set, handle error
 	if cloudwatchLogGroup == "" {
-		HandleInitError(appLogger, errors.New(cannotLoadEnvVar))
+		HandleInitError(appLogger, errors.New(ErrMsgCannotLoadEnvVar))
 	}
 	appLogger.Info("loaded cloudwatch log group env var %v", cloudwatchLogGroup)
 	namespace := os.Getenv(metricNamespaceEnv)
-	// if the environment variable is not set, panic
+	// if the environment variable is not set, handle error
 	if namespace == "" {
-		HandleInitError(appLogger, errors.New(cannotLoadEnvVar))
+		HandleInitError(appLogger, errors.New(ErrMsgCannotLoadEnvVar))
 	}
 	appLogger.Info("loaded metric namespace env var %v", namespace)
-
-	ctx := context.Background()
 
 	// read the environment variables to get the regions
 	rawRegions := os.Getenv(regionsEnv)
 	if rawRegions == "" {
-		HandleInitError(appLogger, errors.New(cannotLoadEnvVar))
+		HandleInitError(appLogger, errors.New(ErrMsgCannotLoadEnvVar))
 	}
 	regions := strings.Split(rawRegions, ",")
 	appLogger.Info("loaded regions %v", regions)
 
+	// readn environment variable to get flush interval
 	rawInterval := os.Getenv(flushIntervalEnv)
 	if rawInterval == "" {
 		rawInterval = "45"
 		appLogger.Warn("flush interval not set, defaulting to 45 seconds")
 	}
-
 	secs, err := strconv.Atoi(rawInterval)
 	if err != nil {
 		HandleInitError(appLogger, err)
 	}
 	flusherInterval = time.Duration(secs) * time.Second
-	appLogger.Info("flush interval %v", flusherInterval)
+	appLogger.Info("loaded flush interval %v", flusherInterval)
 
-	// we need to make sure the log group and name are created
+	ctx := context.Background()
+
+	// load aws config
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		HandleInitError(appLogger, err)
 	}
 
+	// we need to ensure the log groups and streams exists in all regions
 	err = cwlclient.EnsureGroupAndStreamAcrossRegions(
 		ctx,
 		regions,
@@ -145,9 +148,9 @@ func main() {
 	if err != nil {
 		HandleInitError(appLogger, err)
 	}
-	appLogger.Info("log group and streams creating successfully in all regions")
+	appLogger.Info("log group [%s] and stream [%s] created successfully in all regions")
 
-	// load a safemap of cloudtrail emf batchers for each region
+	// load a safemap of cloudwatch log clients for each region
 	cwlClientMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
 	for _, region := range regions {
 		client, err := cwlclient.NewCloudWatchLogsClient(cfg, region)
@@ -161,6 +164,7 @@ func main() {
 	}
 
 	// create emf flusher
+	// this is used to read from the /tmp and push EMF's to cloudtrail logs
 	flusher := emf.NewEMFFlusher(emf.EMFFlusherConfig{
 		CwlClientMap:  cwlClientMap,
 		LogStreamName: logStreamName,
@@ -168,11 +172,13 @@ func main() {
 		Logger:        appLogger,
 	})
 
-	// create cloud trail flie batcher
+	// create cloud trail flie batchers
+	// it will ingest cloudtrail records, convert them to emf
+	// and store them in /tmp until the batch flush conditions are met
 	cloudtrailFileBatcher := cloudtrailemfbatcher.NewCTFileBatcher(cloudtrailemfbatcher.CTFileBatcherConfig{
 		ParentCtx:     ctx,
 		Namespace:     namespace,
-		MetricName:    "CallCount",
+		MetricName:    metricNameCallCount,
 		BaseDir:       os.TempDir(),
 		MaxCount:      maxEvents,
 		MaxBytes:      maxBytes,
@@ -181,6 +187,7 @@ func main() {
 		Logger:        appLogger,
 	})
 
+	// initialize handler
 	RateLimitHandler, err = handlers.NewRateLimitHandler(handlers.RateLimitHandlerConfig{
 		CloudTrailEmfFileBatcher: cloudtrailFileBatcher,
 		Namespace:                namespace,
@@ -200,6 +207,7 @@ func HandleInitError(logger logger.Logger, err error) {
 	os.Exit(1)
 }
 
+// re-useable function to create cloudwatch logs client
 func makeFactory(cfg aws.Config) cwlclient.ClientFactory {
 	return func(region string) (cwlclient.CloudWatchLogsClient, error) {
 		cfg.Region = region

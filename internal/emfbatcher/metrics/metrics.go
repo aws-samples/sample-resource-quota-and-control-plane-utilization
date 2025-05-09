@@ -16,6 +16,7 @@ import (
 // buildEMFRecord turns a CloudWatchMetric into an EMFRecord,
 // embedding metadata as dimensions and fields.
 func buildEMFRecord(m sharedtypes.CloudWatchMetric, namespace string) (sharedtypes.EMFRecord, error) {
+
 	ts := m.Timestamp.UnixMilli()
 
 	// sort metadata keys to produce deterministic dimension order

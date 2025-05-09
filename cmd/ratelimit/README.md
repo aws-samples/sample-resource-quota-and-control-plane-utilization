@@ -15,7 +15,7 @@
 The Rate Limit Monitoring solution captures control-plane API calls via EventBridge, routes them through a single SQS FIFO queue (with per-event “messageGroupId”s), and processes them in batches of 10 with a Go Lambda. Each batch is emitted as Embedded Metric Format (EMF) logs into CloudWatch Logs to create custom metrics.
 
 ## ⚠️ DISCLAIMER ⚠️
-This solution will begin to track events that match the event pattern and populate cloudwatch metrics once deployed.  Please be sure to be aware of any associated costs with deploying and running within your account.
+This solution will begin to track events that match the event pattern and populate cloudwatch metrics once deployed.  Please be sure to be aware of any associated costs with deploying and running within your account. 
 
 ## Configuration
 
@@ -187,7 +187,8 @@ EventBridgeDeliveryRole:
                   - sqs:SendMessageBatch
                 Resource: !GetAtt EventsQueue.Arn
 ```
-- This role is added to each event bridge target rule so that it can deliver the events to the targets specified 
+- Purpose :
+  - Authorizes eventbridge to deliver events to the targets on the [SQS Queue](#sqs)
 
 #### AssumeRole Event Rule 
 ```json 
@@ -198,9 +199,10 @@ EventBridgeDeliveryRole:
   }
 }
 ```
-- Will send matching events to [AssumeRole Processor Lambda function](#assumeroleprocessor) using event-source mapping
-- Batch size = 10
-- Uses the [EventBridge Service Role](#eventbridge-service-role)
+- Target : [AssumeRole Processor Lambda function](#assumeroleprocessor) 
+- Input to target : `$.detail`
+- Batch size : `10`
+- IAM role : [EventBridge Service Role](#eventbridge-service-role)
 
 #### AssumeRoleWithWebIdentityRules
 ```json 
@@ -211,15 +213,18 @@ EventBridgeDeliveryRole:
   }
 }
 ```
-- Will send matching events to [AssumeRoleWithWebIdentity Lambda function](#assumeroleprocessor) using event-source mapping
-- Batch size = 10 
-- Uses the [EventBridge Service Role](#eventbridge-service-role)
+- Target: [AssumeRoleWithWebIdentity Lambda function](#assumeroleprocessor) 
+- Input to target : `$.detail`
+- Batch size : 10 
+- IAM Role : [EventBridge Service Role](#eventbridge-service-role)
 
 ### SQS
 
-- FIFO queue named event-queue.fifo
-- Content based deuplication = true
-- Visibility timeout = 30 seconds 
+- Queue name : `event-queue.fifo`
+- Type : `FIFO`
+- Content based deuplication = `true`
+- Visibility timeout = `30 seconds` 
+- Encryption : `SSE-SQS`
 
 #### SQS Queue Policy
 ```json
@@ -255,12 +260,24 @@ EventBridgeDeliveryRole:
 ```
 
 ### Lambda
-#### AssumeRoleProcessor
-- Processes the AssumeRole events
-#### AssumeRoleWithWebIdentityProcessor
-- Processes the AssumeRoleWithWebIdentity events
 
-#### Lambda IAM role (same policy for both)
+#### Lambda Function(s)
+- Function Name : `AssumeRoleProcessor` 
+- Function Name : `AssumeRoleWithWebIdentityProcessor`
+- Memory : `128 MB`
+- Timeout : `30s`
+- IAM Role : [Lambda Execution Role](#lambda-iam-role-same-policy-for-both)
+- Purpose : 
+  - Ingests cloudtrail events from SQS in batches
+  - Converts to EMF
+  - Batches EMF's to /tmp by region until batch trigger is reached
+  - Batch conditions (per region) : 
+    - `10k records`
+    - `1 MB total size`
+    - `45s (default)`
+  - Sends batch of EMFs to cloudtrail logs when triggered
+
+##### Lambda IAM role (same policy for both)
 ```yaml
 # The IAM role will use the following managed policies 
  - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
@@ -278,6 +295,12 @@ EventBridgeDeliveryRole:
                   - logs:DescribeLogStreams
                 Resource: "*"
 ```
+
+#### Lambda Extension 
+- Purpose : 
+  - Subsribes to `INVOKE` and `SHUTDOWN` events from Lambda Runtime API
+  - On `SHUTDOWN`, it will drain any remaining EMF's that are in /tmp directory
+- Uses `[emf]` prefix in logs
 
 ### Error Metrics
 #### Creating a Metric Filter (console)
