@@ -238,7 +238,7 @@ Resources:
     Properties:
       AlarmName: "AssumeRole-rps-alarm"
       AlarmDescription: "AssumeRole API requests per second"
-      TreatMissingData: breaching
+      TreatMissingData: missing
       EvaluationPeriods: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       Threshold: 50
@@ -266,7 +266,7 @@ Resources:
     Properties:
       AlarmName: "AssumeRoleWithWebIdentity-rps-alarm"
       AlarmDescription: "AssumeRoleWithWebIdentity API requests per second"
-      TreatMissingData: breaching
+      TreatMissingData: missing
       EvaluationPeriods: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       Threshold: 50

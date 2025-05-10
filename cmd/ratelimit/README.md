@@ -5,8 +5,7 @@
 2. [Configuration](#configuration)
 3. [Deployment](#deployment)
 4. [Created Resources](#created-resources)
-5. [Creating an Alarm](#creating-an-alarm)
-6. [Testing / Code Coverage](#testing--code-coverage)
+5. [Testing / Code Coverage](#testing--code-coverage)
 
 ![Architecture Diagram](../../media/rate-limit-solution.png)
 
@@ -302,6 +301,20 @@ EventBridgeDeliveryRole:
   - On `SHUTDOWN`, it will drain any remaining EMF's that are in /tmp directory
 - Uses `[emf]` prefix in logs
 
+### Cloudwatch
+
+#### Cloudwatch Alarm(s)
+
+- Name : `AssumeRole-rps-alarm`
+- Threshold : `100`
+- Period : `1 min`
+- Comparison Operator : `GreaterThanOrEqualTo`
+-----
+- Name : `AssumeRoleWithWebIdentity-rps-alarm` 
+- Threshold : `100`
+- Period : `1 min`
+- Comparison Operator : `GreaterThanOrEqualTo`
+
 ### Error Metrics
 #### Creating a Metric Filter (console)
 The solution uses a logger interface that will write `ERROR` logs to Cloudwatch Logs whenever there is a downstream I/O error and continue processing.  
@@ -317,33 +330,6 @@ From there you want to use the `ERROR` filter pattern which will match any error
 ##### Recommendation
 
 Create your Error metric in a unique namespace specific for the application.  Error Metrics are 1 dimensional so without this, they will collide with other error metrics that may exists in the namespace.  
-
-
-## Creating an Alarm
-
-After deploying the solution, it will begin to track call counts for the events in scope.  By default it will track the following events : 
-- `AssumeRole`
-- `AssumeRoleWithWebIdentity`
-
-Navigate to the Cloudwatch Metric tab, you should see your namespace
-![Rate Limit Namepsace](../../media/rate-limit-namespace.png)
-
-In order to alarm on the metric you need to create new metric that is normalized over a span of time.  The `CallCount` metric is volume based, it purely tracks call counts.  In order to normalized and alarm, we need to make a metric with the following logic 
-
-```bash 
-e1 (new metric) = m1 / 60 #m1 is a reference variable to your call count metric
-
-# This will create a metric that is normalized and produces an RPS level metric
-```
-![Derived Metric](../../media/derived-metric.png)
-
-Now that we have that metric, you can give it a name such as ${EVENT_NAME}_RPS.  This represents your RPS over a minute time span.  
-
-Now we can alarm on this normalized metric
-
-![RPS alarm](../../media/rps-alarm.png)
-
-Now you will be alarmed when ever you RPS exceeds the threshold you define!
 
 ## Testing / Code Coverage
 ### Running Tests
