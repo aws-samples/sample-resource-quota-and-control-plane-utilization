@@ -153,7 +153,7 @@ Resources:
     Properties:
       FunctionName: AssumeRoleProcessor
       Handler: !Ref AssumeRoleHandler
-      CodeUri: ../../cmd/ratelimit
+      CodeUri: ../../../cmd/ratelimit
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
@@ -180,7 +180,7 @@ Resources:
     Properties:
       FunctionName: AssumeRoleWebIdentityProcessor
       Handler: !Ref AssumeWebIdentityHandler
-      CodeUri: ../../cmd/ratelimit
+      CodeUri: ../../../cmd/ratelimit
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
@@ -230,6 +230,64 @@ Resources:
                   - sqs:SendMessage
                   - sqs:SendMessageBatch
                 Resource: !GetAtt EventsQueue.Arn
+
+  
+  ### 6) RPS Alarms ###
+  AssumeRoleRPSAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "AssumeRole-rps-alarm"
+      AlarmDescription: "AssumeRole API requests per second"
+      TreatMissingData: breaching
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 50
+      Metrics:
+        # 1) raw CallCount for AssumeRole
+        - Id: assumeRoleCount
+          MetricStat:
+            Metric:
+              Namespace: !Ref MetricNamespace
+              MetricName: CallCount
+              Dimensions:
+                - Name: eventName
+                  Value: AssumeRole
+            Period: 60
+            Stat: Sum
+          ReturnData: false
+        # 2) compute RPS = assumeRoleCount / 60
+        - Id: assumeRoleRps
+          Expression: "assumeRoleCount / 60"
+          Label: "AssumeRole RPS"
+          ReturnData: true
+
+  AssumeRoleWithWebIdentityRPSAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "AssumeRoleWithWebIdentity-rps-alarm"
+      AlarmDescription: "AssumeRoleWithWebIdentity API requests per second"
+      TreatMissingData: breaching
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 50
+      Metrics:
+        - Id: assumeWebCount
+          MetricStat:
+            Metric:
+              Namespace: !Ref MetricNamespace
+              MetricName: CallCount
+              Dimensions:
+                - Name: eventName
+                  Value: AssumeRoleWithWebIdentity
+            Period: 60
+            Stat: Sum
+          ReturnData: false
+        - Id: assumeWebRps
+          Expression: "assumeWebCount / 60"
+          Label: "AssumeRoleWithWebIdentity RPS"
+          ReturnData: true
+
+
 
 
 Outputs:

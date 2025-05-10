@@ -101,7 +101,7 @@ Resources:
       BuildMethod: go1.x
     Properties:
       FunctionName: geras-resource-quota
-      CodeUri: ../../cmd/resourcequota                  # assumes your SAM template lives at your repo root
+      CodeUri: ../../../cmd/resourcequota                  # assumes your SAM template lives at your repo root
       Handler: bootstrap                                # the name of your compiled binary
       Role: !GetAtt LambdaExecutionRole.Arn
       Layers : 
@@ -112,14 +112,10 @@ Resources:
           CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
           METRIC_NAMESPACE: !Ref MetricNamespace
           LOG_LEVEL: !Ref LogLevel   
+  
+  
 
-      Events:
-        EveryFiveMinutes:
-          Type: Schedule
-          Properties:
-            Schedule: cron(*/5 * * * ? *)   # runs every 5 minutes
-            Enabled: true
-
+      
 Outputs:
   ResourceQuotaFunctionArn:
     Description: "ARN of the ResourceQuota Lambda function"
