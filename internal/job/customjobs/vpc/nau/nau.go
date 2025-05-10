@@ -84,15 +84,14 @@ func (j *VPCNAUJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric
 	if err != nil {
 		return nil, err
 	}
-
 	quotaValue := getServiceQuotaOutput.Quota.Value
 
 	// Convert to CloudWatch metrics
 	out := make([]sharedtypes.CloudWatchMetric, 0, len(keys))
 	for _, vpcId := range keys {
-		j.Logger.Info(VPCNAUJobPrefix+": calculating nau utilization for VPC=%s", vpcId)
+		j.Logger.Debug("%s calculating nau utilization for VPC=%s", j.GetJobName(), vpcId)
 		vpcNAU := output[vpcId]
-		j.Logger.Info(VPCNAUJobPrefix+": units %d, quota value %v", vpcNAU, *quotaValue)
+		j.Logger.Debug("%s : units %d, quota value %v", j.GetJobName(), vpcNAU, *quotaValue)
 		nauUtilization := float64(vpcNAU) / float64(*quotaValue)
 		metric := sharedtypes.CloudWatchMetric{
 			Name:      cloudwatchMetricName,
@@ -102,7 +101,7 @@ func (j *VPCNAUJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric
 			Timestamp: now,
 		}
 		out = append(out, metric)
-		j.Logger.Info(VPCNAUJobPrefix+": added metric for VPC=%s → nau utilization=%v", vpcId, nauUtilization)
+		j.Logger.Debug("%s : added metric for VPC=%s → nau utilization=%v", j.GetJobName(), vpcId, nauUtilization)
 	}
 	return out, nil
 }

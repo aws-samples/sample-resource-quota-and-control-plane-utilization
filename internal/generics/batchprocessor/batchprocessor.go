@@ -72,7 +72,7 @@ func NewGenericBatchProcessor[I any, O any](
 	p.wg.Add(1)
 	go p.start(ctx)
 	// log the type of the batch
-	logger.Debug("%T successfully started", p)
+	logger.Debug("batch processor generic successfully started")
 	return p
 }
 
@@ -165,9 +165,9 @@ func (p *GenericBatchProcessor[I, O]) Add(item I) {
 // (including the final flush) has completed.
 func (p *GenericBatchProcessor[I, O]) Wait() {
 	close(p.in)
-	p.Logger.Info("%T input channel closed", p)
+	p.Logger.Info("batch processor generic input channel closed")
 	p.wg.Wait()
-	p.Logger.Info("%T wait done", p)
+	p.Logger.Info("batch processor generic wait done")
 }
 
 // GetInputChannel

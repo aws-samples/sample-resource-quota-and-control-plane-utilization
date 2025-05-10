@@ -68,7 +68,7 @@ func (j *OIDCProviderJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatch
 	}
 
 	totalCouunt = int64(len(oidcProvidersOutput.OpenIDConnectProviderList))
-	j.Logger.Info("%s total : %d", j.GetJobName(), totalCouunt)
+	j.Logger.Debug("%s total : %d", j.GetJobName(), totalCouunt)
 
 	// get the quota for oidc providers
 	getServiceQuotaInput := &servicequotas.GetServiceQuotaInput{
@@ -80,10 +80,9 @@ func (j *OIDCProviderJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatch
 	if err != nil {
 		return nil, err
 	}
-
 	quotaValue := getServiceQuotaOutput.Quota.Value
+	j.Logger.Debug("%s quota : %d", j.GetJobName(), *quotaValue)
 	utilization := (float64(totalCouunt) / *quotaValue) * float64(100)
-
 	j.Logger.Info("%s utilization: %.2f%%", j.GetJobName(), utilization)
 
 	meric := sharedtypes.CloudWatchMetric{

@@ -69,7 +69,7 @@ func NewJobManager(config JobManagerConfig) *JobManager {
 		log:        config.Log,
 	}
 
-	jm.log.Info("jobmanager: starting %d workers", config.Workers)
+	jm.log.Info("starting %d workers", config.Workers)
 	jm.shutdownWg.Add(config.Workers)
 	for i := range config.Workers {
 		go jm.worker(i)
@@ -82,44 +82,44 @@ func NewJobManager(config JobManagerConfig) *JobManager {
 func (jm *JobManager) AddJob(job Job) {
 	// check context cancellatoin first
 	if jm.parentCtx.Err() != nil {
-		jm.log.Debug("jobmanager: parent context cancelled—dropping job %s (region=%s)", job.GetJobName(), job.GetRegion())
+		jm.log.Debug("parent context cancelled—dropping job %s (region=%s)", job.GetJobName(), job.GetRegion())
 		return
 	}
 	jm.jobCh <- job
-	jm.log.Debug("jobmanager: enqueued job %s (region=%s)", job.GetJobName(), job.GetRegion())
+	jm.log.Debug("enqueued job %s (region=%s)", job.GetJobName(), job.GetRegion())
 }
 
 // Wait signals no more jobs, then blocks until all workers have exited.
 func (jm *JobManager) Wait() {
 	close(jm.jobCh)
-	jm.log.Info("jobmanager: waiting for workers to finish")
+	jm.log.Info("waiting for workers to finish")
 	jm.shutdownWg.Wait()
-	jm.log.Info("jobmanager: all workers exited")
+	jm.log.Info("all workers exited")
 }
 
 func (jm *JobManager) worker(id int) {
 	defer jm.shutdownWg.Done()
-	jm.log.Info("jobmanager: worker-%d started", id)
+	jm.log.Info("worker-%d started", id)
 
 	// explicitly check if context is cancelled
 	if jm.parentCtx.Err() != nil {
-		jm.log.Info("jobmanager: worker-%d shutting down (parent context done)", id)
+		jm.log.Info("worker-%d shutting down (parent context done)", id)
 		return
 	}
 
 	for {
 		select {
 		case <-jm.parentCtx.Done():
-			jm.log.Info("jobmanager: worker-%d shutting down (parent context done)", id)
+			jm.log.Info("worker-%d shutting down (parent context done)", id)
 			return
 
 		case job, ok := <-jm.jobCh:
 			if !ok {
-				jm.log.Info("jobmanager: worker-%d shutting down (job channel closed)", id)
+				jm.log.Info("worker-%d shutting down (job channel closed)", id)
 				return
 			}
 
-			jm.log.Debug("jobmanager: worker-%d executing job %s", id, job.GetJobName())
+			jm.log.Info("worker-%d executing job %s", id, job.GetJobName())
 
 			// derive per-job context with timeout
 			ctx, cancel := context.WithTimeout(jm.parentCtx, jm.jobTimeout)
@@ -132,25 +132,25 @@ func (jm *JobManager) worker(id int) {
 				continue
 			}
 
-			jm.log.Debug("jobmanager: worker-%d job %s returned %d metrics", id, job.GetJobName(), len(metrics))
+			jm.log.Info("worker-%d job %s returned %d metrics", id, job.GetJobName(), len(metrics))
 
 			// dispatch metrics (blocking until there's room or parentCtx cancels)
 			for _, m := range metrics {
 				select {
 				case <-jm.parentCtx.Done():
-					jm.log.Info("jobmanager: worker-%d interrupted before dispatching all metrics", id)
+					jm.log.Info("worker-%d interrupted before dispatching all metrics", id)
 					return
 				default:
 					ch, ok := jm.metricMap.Load(job.GetRegion())
 					if !ok {
-						jm.log.Error("jobmanager: no metric channel for region %s", job.GetRegion())
+						jm.log.Error("no metric channel for region %s", job.GetRegion())
 						continue
 					}
 					select {
 					case ch <- m:
-						jm.log.Debug("jobmanager: worker-%d dispatched metric %s for region %s", id, m.Name, job.GetRegion())
+						jm.log.Debug("worker-%d dispatched metric %s for region %s", id, m.Name, job.GetRegion())
 					case <-jm.parentCtx.Done():
-						jm.log.Info("jobmanager: worker-%d interrupted while sending metric", id)
+						jm.log.Info("worker-%d interrupted while sending metric", id)
 						return
 					}
 				}

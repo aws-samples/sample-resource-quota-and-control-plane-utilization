@@ -174,32 +174,32 @@ func (c *calculator) calculateENINau(ctx context.Context, vpcID string) (int64, 
 			switch eni.InterfaceType {
 			case ec2Types.NetworkInterfaceTypeLambda:
 				sum += int64(c.wt.Get(LambdaFunction))
-				c.logger.Debug("vpcId [%s] found lambda function %s, total eni naus %s", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
+				c.logger.Debug("vpcId [%s] found lambda function %s, total eni naus %d", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
 				continue
 			case ec2Types.NetworkInterfaceTypeEfa, ec2Types.NetworkInterfaceTypeEfaOnly:
 				sum += int64(c.wt.Get(EFAInterface))
-				c.logger.Debug("vpcId [%s] found EFA interface %s, total eni naus %s", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
+				c.logger.Debug("vpcId [%s] found EFA interface %s, total eni naus %d", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
 			case ec2Types.NetworkInterfaceTypeBranch:
 				sum += int64(c.wt.Get(EKSPod))
-				c.logger.Debug("vpcId [%s] found EKS pod %s, total eni naus %s", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
+				c.logger.Debug("vpcId [%s] found EKS pod %s, total eni naus %d", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
 			default:
 				sum += int64(c.wt.Get(ENI))
-				c.logger.Debug("vpcId [%s] found eni %s, total eni naus %s", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
+				c.logger.Debug("vpcId [%s] found eni %s, total eni naus %d", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
 			}
 
 			// IPv4/IPv6 addresses
 			for _, ip := range eni.PrivateIpAddresses {
 				sum += int64(c.wt.Get(IPv4IPv6Address))
-				c.logger.Debug("vpcId [%s] found private ipv4 %s, total eni naus %s", vpcID, aws.ToString(ip.PrivateIpAddress), sum)
+				c.logger.Debug("vpcId [%s] found private ipv4 %s, total eni naus %d", vpcID, aws.ToString(ip.PrivateIpAddress), sum)
 				if ip.Association != nil && ip.Association.PublicIp != nil {
 					sum += int64(c.wt.Get(IPv4IPv6Address))
-					c.logger.Debug("vpcId [%s] found public ipv4 %s, total eni naus %s", vpcID, aws.ToString(ip.Association.PublicIp), sum)
+					c.logger.Debug("vpcId [%s] found public ipv4 %s, total eni naus %d", vpcID, aws.ToString(ip.Association.PublicIp), sum)
 				}
 			}
 			sum += int64(len(eni.Ipv6Addresses)) * int64(c.wt.Get(IPv4IPv6Address))
-			c.logger.Debug("vpcId [%s] found %d ipv6 addresses, total eni naus %s", vpcID, len(eni.Ipv6Addresses), sum)
+			c.logger.Debug("vpcId [%s] found %d ipv6 addresses, total eni naus %d", vpcID, len(eni.Ipv6Addresses), sum)
 			sum += int64(len(eni.Ipv6Prefixes)+len(eni.Ipv4Prefixes)) * int64(c.wt.Get(PrefixAssignedToENI))
-			c.logger.Debug("vpcId [%s] found %d ipv6 prefixes, total eni naus %s", vpcID, len(eni.Ipv6Prefixes)+len(eni.Ipv4Prefixes), sum)
+			c.logger.Debug("vpcId [%s] found %d ipv6 prefixes, total eni naus %d", vpcID, len(eni.Ipv6Prefixes)+len(eni.Ipv4Prefixes), sum)
 		}
 	}
 	return sum, nil
@@ -214,7 +214,7 @@ func (c *calculator) calculateNATGatewayNau(ctx context.Context, vpcID string) (
 	}
 	// NAT gateways: one per subnet
 	units := int64(c.wt.Get(NATGateway)) * int64(len(out.NatGateways))
-	c.logger.Debug("vpcId [%s] found %d nat gateways nau %v ", vpcID, len(out.NatGateways), units)
+	c.logger.Debug("vpcId [%s] found %d nat gateways nau %d ", vpcID, len(out.NatGateways), units)
 	return units, nil
 }
 
@@ -231,18 +231,18 @@ func (c *calculator) calculateVPCEndpointsNau(ctx context.Context, vpcID string)
 		// interface endpoints: one subnet ID for AZ
 		if len(ep.SubnetIds) > 0 {
 			azCount = int64(len(ep.SubnetIds))
-			c.logger.Debug("vpcId [%s] found %d vpc endpoint in %v az's", vpcID, ep.VpcEndpointType, azCount)
+			c.logger.Debug("vpcId [%s] found %v vpc endpoint in %d az's", vpcID, ep.VpcEndpointType, azCount)
 
 			// gateway endpoints: one route table ID per AZ
 		} else if len(ep.RouteTableIds) > 0 {
 			azCount = int64(len(ep.RouteTableIds))
-			c.logger.Debug("vpcId [%s] found %d vpc endpoint %v az's", vpcID, ep.VpcEndpointType, azCount)
+			c.logger.Debug("vpcId [%s] found %v vpc endpoint %d az's", vpcID, ep.VpcEndpointType, azCount)
 			// fallback if neither is set
 		} else {
 			azCount = 1
 		}
 		sum += azCount * int64(c.wt.Get(VPCEndpointPerAZ))
-		c.logger.Debug("vpcId [%s] vpc endpoint nau %v", vpcID, sum)
+		c.logger.Debug("vpcId [%s] vpc endpoint nau %d", vpcID, sum)
 	}
 	return sum, nil
 }
@@ -266,7 +266,7 @@ func (c *calculator) calculateLoadBalancersNau(ctx context.Context, vpcID string
 				c.logger.Debug("vpcId [%s] found load balancer type %s , %s", vpcID, lb.Type, *lb.LoadBalancerArn)
 			}
 			sum += int64(len(lb.AvailabilityZones)) * int64(weight)
-			c.logger.Debug("vpcId [%s] found load balancer %v, %v, total lb naus %s", vpcID, lb.Type, *lb.LoadBalancerArn, sum)
+			c.logger.Debug("vpcId [%s] found load balancer %v, %s, total lb naus %d", vpcID, lb.Type, *lb.LoadBalancerArn, sum)
 		}
 	}
 	return sum, nil
@@ -285,7 +285,7 @@ func (c *calculator) calculateTransitGatewayVpcAttachmentsNau(ctx context.Contex
 		}
 		total += int64(len(page.TransitGatewayVpcAttachments)) * weight
 	}
-	c.logger.Debug("vpcId [%s] total tgw-vpc attachments naus %s", vpcID, total)
+	c.logger.Debug("vpcId [%s] total tgw-vpc attachments naus %d", vpcID, total)
 	return total, nil
 }
 
@@ -295,7 +295,7 @@ func (c *calculator) calculateEFSMountTargetsInVpcNau(ctx context.Context, vpcID
 		Filters: []ec2Types.Filter{{Name: aws.String("vpc-id"), Values: []string{vpcID}}},
 	})
 	if err != nil {
-		return 0, fmt.Errorf("listing subnets in %q: %w", vpcID, err)
+		return 0, fmt.Errorf("listing subnets in %s: %w", vpcID, err)
 	}
 	subnets := make(map[string]struct{}, len(snOut.Subnets))
 	for _, s := range snOut.Subnets {
@@ -321,13 +321,13 @@ func (c *calculator) calculateEFSMountTargetsInVpcNau(ctx context.Context, vpcID
 				for _, mt := range mtPage.MountTargets {
 					if _, ok := subnets[aws.ToString(mt.SubnetId)]; ok {
 						total += int64(c.wt.Get(EFSMountTarget))
-						c.logger.Debug("vpcId [%s] found efs mount target %s, total efs naus %s", vpcID, aws.ToString(mt.MountTargetId), total)
+						c.logger.Debug("vpcId [%s] found efs mount target %s, total efs naus %v", vpcID, aws.ToString(mt.MountTargetId), total)
 					}
 				}
 			}
 		}
 	}
-	c.logger.Debug("vpcId [%s] total efs mount targets naus %s", vpcID, total)
+	c.logger.Debug("vpcId [%s] total efs mount targets naus %v", vpcID, total)
 	return total, nil
 }
 

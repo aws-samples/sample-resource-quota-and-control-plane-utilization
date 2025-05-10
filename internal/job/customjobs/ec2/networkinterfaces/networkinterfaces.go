@@ -70,7 +70,7 @@ func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]sharedtypes.Clou
 		totalCount += int64(len(output.NetworkInterfaces))
 	}
 
-	nic.Logger.Info("%s total count : %v", nic.jobName, totalCount)
+	nic.Logger.Debug("%s total count : %v", nic.jobName, totalCount)
 
 	// call servicequota api to get current quota limit for network interfaces
 	getServiceQuotaInput := &servicequotas.GetServiceQuotaInput{
@@ -83,9 +83,9 @@ func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]sharedtypes.Clou
 		return nil, err
 	}
 	quotaValue := getServiceQuotaOutput.Quota.Value
+	nic.Logger.Debug("%s quota value : %v", nic.jobName, *quotaValue)
 	utilization := (float64(totalCount) / *quotaValue) * float64(100)
-
-	nic.Logger.Info("%s utilization %.2f%%\n", nic.GetJobName(), utilization)
+	nic.Logger.Debug("%s utilization %.2f%%\n", nic.GetJobName(), utilization)
 
 	metric := sharedtypes.CloudWatchMetric{
 		Name:      cloudwatchMetricName,

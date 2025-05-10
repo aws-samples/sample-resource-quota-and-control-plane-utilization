@@ -70,7 +70,7 @@ func (lj *ListClusterJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatch
 		totalCount += int64(len(output.Clusters))
 	}
 
-	lj.Logger.Info("%s total : %d\n", lj.GetJobName(), totalCount)
+	lj.Logger.Debug("%s total : %d", lj.GetJobName(), totalCount)
 
 	// call service quota api to get quota limit for eks clusters
 	getServiceQuotaInput := &servicequotas.GetServiceQuotaInput{
@@ -83,9 +83,9 @@ func (lj *ListClusterJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatch
 		return nil, err
 	}
 	quotaValue := getServiceQuotaOutput.Quota.Value
+	lj.Logger.Debug("%s quota value : %f", lj.GetJobName(), *quotaValue)
 	utilization := (float64(totalCount) / *quotaValue) * 100
-
-	lj.Logger.Info("%s utilization : %f\n", lj.GetJobName(), utilization)
+	lj.Logger.Debug("%s utilization : %f\n", lj.GetJobName(), utilization)
 	metric := sharedtypes.CloudWatchMetric{
 		Name:      cloudwatchMetricName,
 		Value:     utilization,

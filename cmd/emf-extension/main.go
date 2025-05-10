@@ -61,12 +61,12 @@ func main() {
 	}
 	logger.Init(logLevel, os.Stdout)
 	log := logger.Get()
-	log.Debug(printPrefix+" log level set to %s", logLevelValue)
+	log.Debug("%s log level set to %s", printPrefix, logLevelValue)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	awsCfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
-		log.Error(printPrefix+" load AWS config failed: %v", err)
+		log.Error("%s load AWS config failed: %v", printPrefix, err)
 		os.Exit(1)
 	}
 
@@ -76,11 +76,11 @@ func main() {
 		HandleInitError(log, errors.New(ErrMsgCannotLoadEnvVar))
 	}
 	regions := strings.Split(rawRegions, ",")
-	log.Info(printPrefix+" regions %s", regions)
+	log.Info("%s regions %s", printPrefix, regions)
 	logGroup := os.Getenv(cloudwatchGroupEnvVar)
 
 	if logGroup == "" {
-		log.Error(printPrefix + " cloudwatch log group not set")
+		log.Error("%s cloudwatch log group not set", printPrefix)
 		os.Exit(1)
 	}
 
@@ -95,7 +95,7 @@ func main() {
 	if err != nil {
 		HandleInitError(log, err)
 	}
-	log.Info(printPrefix+" log group and streams created across all regions %s", regions)
+	log.Info("%s log group and stream created across all regions %s", printPrefix, regions)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
@@ -110,10 +110,10 @@ func main() {
 	stashDir := os.TempDir()
 	files, err := filepath.Glob(filepath.Join(stashDir, "emf_*.ndjson"))
 	if err != nil {
-		log.Error(printPrefix+" glob failed: %v", err)
+		log.Error("%s glob failed: %v", printPrefix, err)
 		os.Exit(1)
 	}
-	log.Debug(printPrefix+" found %d files in %s", len(files), stashDir)
+	log.Debug("%s found %d files in %s", printPrefix, len(files), stashDir)
 
 	// b) build per-region CWL client map
 	cwlMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
@@ -121,38 +121,38 @@ func main() {
 		region := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "emf_"), ".ndjson")
 		client, err := cwlclient.NewCloudWatchLogsClient(awsCfg, region)
 		if err != nil {
-			log.Error(printPrefix+" CWL client creation failed for region %s: %v", region, err)
+			log.Error("%s CWL client creation failed for region %s: %v", printPrefix, region, err)
 			continue
 		}
 		cwlMap.Store(region, client)
-		log.Debug(printPrefix+" CWL client created for region %s", region)
+		log.Debug("%s CWL client created for region %s", printPrefix, region)
 	}
 
 	// c) create EMF flusher
 
-	log.Debug(printPrefix+" cloudwatch log group set to %s", logGroup)
+	log.Debug("%s cloudwatch log group set to %s", printPrefix, logGroup)
 	flusher := emf.NewEMFFlusher(emf.EMFFlusherConfig{
 		CwlClientMap:  cwlMap,
 		LogStreamName: utils.MakeStreamName(),
 		LogGroupName:  logGroup,
 		Logger:        log,
 	})
-	log.Debug(printPrefix + " flusher created")
+	log.Debug("%s flusher created", printPrefix)
 
 	// ── 1) REGISTER ────────────────────────────────────────────────────────
 	res, err := extensionClient.Register(ctx, extensionName)
 	if err != nil {
 		panic(err)
 	}
-	log.Info(printPrefix+"Register response: %v", prettyPrint(res))
+	log.Info("%s Register response: %v", printPrefix, prettyPrint(res))
 
 	// ── 2) PROCESS EVENTS UNTIL SHUTDOWN ──────────────────────────────────
 	processEvents(ctx, log)
-	log.Info(printPrefix + " processEvents() returned, SHUTDOWN")
+	log.Info("%s processEvents() returned, SHUTDOWN", printPrefix)
 
 	// ── 3) ON SHUTDOWN, FLUSH ALL STASH FILES ─────────────────────────────
 	files, _ = filepath.Glob(filepath.Join(os.TempDir(), "emf_*.ndjson"))
-	log.Info(printPrefix+" flushing %d files", len(files))
+	log.Info("%s flushing %d files", printPrefix, len(files))
 	var wg sync.WaitGroup
 	for _, path := range files {
 		wg.Add(1)

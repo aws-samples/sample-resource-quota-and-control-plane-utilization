@@ -92,7 +92,6 @@ func main() {
 	appLogger := logger.Get()
 	appLogger.Info("Initializing the function")
 	appLogger.Info("log value is %v", logLevelValue)
-	appLogger.Info("log level is %v", logLevel)
 
 	// read the environment variables
 	cloudwatchLogGroup := os.Getenv(cloudwatchLogGroupEnv)
@@ -148,7 +147,7 @@ func main() {
 	if err != nil {
 		HandleInitError(appLogger, err)
 	}
-	appLogger.Info("log group [%s] and stream [%s] created successfully in all regions")
+	appLogger.Info("log group %s and stream %s created successfully in all regions", cloudwatchLogGroup, logStreamName)
 
 	// load a safemap of cloudwatch log clients for each region
 	cwlClientMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}

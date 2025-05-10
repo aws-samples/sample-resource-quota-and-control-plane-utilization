@@ -136,6 +136,7 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 		AwsCfg:              awsCfg,
 		Logger:              log,
 	})
+	log.Info("cloudwatch log group %s , log stream %s successfully created in all regions", cloudwatchLogGroup, cloudWatchLogStream)
 
 	// create metric emf metric batchers
 	// it will convert cloudwatch metrics to EMF

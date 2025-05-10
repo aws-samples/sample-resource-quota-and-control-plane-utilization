@@ -57,7 +57,7 @@ func (j *Gp3StorageJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMe
 	if err != nil {
 		return nil, err
 	}
-	j.Logger.Info("%s refresh trusted advisor check status: %v", j.GetJobName(), output.Status)
+	j.Logger.Debug("%s refresh trusted advisor check status: %v", j.GetJobName(), output.Status)
 	return nil, nil
 }
 

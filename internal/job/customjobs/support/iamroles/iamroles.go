@@ -54,7 +54,7 @@ func (irc *IamRoleJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMet
 	if err != nil {
 		return nil, err
 	}
-	irc.Logger.Info("%s refresh trusted advisor check staus : %v", irc.GetJobName(), output.Status)
+	irc.Logger.Debug("%s refresh trusted advisor check staus : %v", irc.GetJobName(), output.Status)
 	return nil, nil
 }
 
