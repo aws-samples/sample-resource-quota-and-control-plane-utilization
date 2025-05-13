@@ -27,6 +27,7 @@ func buildCalc(ec2c *ec2client.FakeEC2Client, efsc *efsclient.FakeEFSClient, elb
 		elb:    elbc,
 		logger: &logger.NoopLogger{},
 		wt:     NewWeightTable(),
+		region: ec2c.GetRegion(),
 	}
 }
 
@@ -657,5 +658,126 @@ func TestCalculateVPCNAU_ErrorBranches(t *testing.T) {
 			_, err := calc.CalculateVPCNAU(ctx)
 			assert.Error(t, err, "%s: expected an error", tc.name)
 		})
+	}
+}
+
+// Edge-case tests for deeper logical coverage
+
+func TestCalculateVPCEndpointsNau_GatewayAndInterface(t *testing.T) {
+	ctx := context.Background()
+	// Mix of interface (subnet) and gateway (route table) endpoints
+	ep1 := ec2Types.VpcEndpoint{SubnetIds: []string{"s1", "s2"}}
+	ep2 := ec2Types.VpcEndpoint{RouteTableIds: []string{"r1", "r2", "r3"}}
+	ec2c := &ec2client.FakeEC2Client{
+		VpcEndpoints: []ec2Types.VpcEndpoint{ep1, ep2},
+	}
+	calc := buildCalc(ec2c, &efsclient.FakeEFSClient{}, &elbv2client.FakeELBV2Client{})
+	units, err := calc.calculateVPCEndpointsNau(ctx, "vpc-1")
+	assert.NoError(t, err)
+	// Interface: 2 AZ *6 + Gateway: 3 AZ *6 = 12 + 18 = 30
+	expected := int64(calc.wt.Get(VPCEndpointPerAZ)) * (2 + 3)
+	assert.Equal(t, expected, units)
+}
+
+func TestCalculateTransitGatewayVpcAttachmentsNau_Multiple(t *testing.T) {
+	ctx := context.Background()
+	// Two pages: first page has 1, second has 2 attachments
+	page1 := &ec2.DescribeTransitGatewayVpcAttachmentsOutput{TransitGatewayVpcAttachments: []ec2Types.TransitGatewayVpcAttachment{{}, {}}}
+	page2 := &ec2.DescribeTransitGatewayVpcAttachmentsOutput{TransitGatewayVpcAttachments: []ec2Types.TransitGatewayVpcAttachment{{}}}
+	ec2c := &ec2client.FakeEC2Client{
+		DescribeTransitGatewayVpcAttachmentsPages: []*ec2.DescribeTransitGatewayVpcAttachmentsOutput{page1, page2},
+		ErrOnDescribeTGWVpcAttachCall:             -1,
+	}
+	calc := buildCalc(ec2c, &efsclient.FakeEFSClient{}, &elbv2client.FakeELBV2Client{})
+	units, err := calc.calculateTransitGatewayVpcAttachmentsNau(ctx, "vpc-1")
+	assert.NoError(t, err)
+	// Total attachments = 2+1=3 * weight
+	expected := int64(3) * int64(calc.wt.Get(TransitGatewayAttachment))
+	assert.Equal(t, expected, units)
+}
+
+func TestCalculateENINau_MultipleIPsAndPrefixes(t *testing.T) {
+	ctx := context.Background()
+	// ENI with 2 private IPs (one with public), 3 IPv6, and 2 prefixes
+	ips := []ec2Types.NetworkInterfacePrivateIpAddress{
+		{PrivateIpAddress: aws.String("10.0.0.1"), Association: &ec2Types.NetworkInterfaceAssociation{PublicIp: aws.String("1.1.1.1")}},
+		{PrivateIpAddress: aws.String("10.0.0.2")},
+	}
+	eni := ec2Types.NetworkInterface{
+		NetworkInterfaceId: aws.String("eni-x"),
+		InterfaceType:      ec2Types.NetworkInterfaceTypeInterface,
+		PrivateIpAddresses: ips,
+		Ipv6Addresses:      []ec2Types.NetworkInterfaceIpv6Address{{Ipv6Address: aws.String("::1")}, {Ipv6Address: aws.String("::2")}, {Ipv6Address: aws.String("::3")}},
+		Ipv6Prefixes:       []ec2Types.Ipv6PrefixSpecification{{Ipv6Prefix: aws.String("fd00::/64")}},
+		Ipv4Prefixes:       []ec2Types.Ipv4PrefixSpecification{{Ipv4Prefix: aws.String("10.0.0.0/24")}},
+	}
+	ec2c := &ec2client.FakeEC2Client{
+		DescribeNetworkInterfacesPages: []*ec2.DescribeNetworkInterfacesOutput{{
+			NetworkInterfaces: []ec2Types.NetworkInterface{eni}}},
+		ErrOnDescribeENICall: -1,
+	}
+	calc := buildCalc(ec2c, &efsclient.FakeEFSClient{}, &elbv2client.FakeELBV2Client{})
+	units, err := calc.calculateENINau(ctx, "vpc-1")
+	assert.NoError(t, err)
+	// Calculation:
+	// base ENI=1
+	// private IPs=2, public adds 1 more for association
+	// IPv6 addresses=3
+	// prefixes total=2
+	expected := int64(calc.wt.Get(ENI))
+	expected += 2 * int64(calc.wt.Get(IPv4IPv6Address))
+	expected += 1 * int64(calc.wt.Get(IPv4IPv6Address))
+	expected += 3 * int64(calc.wt.Get(IPv4IPv6Address))
+	expected += 2 * int64(calc.wt.Get(PrefixAssignedToENI))
+	assert.Equal(t, expected, units)
+}
+
+func TestCalculateLoadBalancersNau_SkipOtherVPCs(t *testing.T) {
+	ctx := context.Background()
+	// LB in other VPC should be ignored
+	outputs := &elbv2.DescribeLoadBalancersOutput{
+		LoadBalancers: []elbv2Types.LoadBalancer{
+			{
+				Type: elbv2Types.LoadBalancerTypeEnumNetwork, VpcId: aws.String("other"),
+				LoadBalancerArn: aws.String("test-arn-1"),
+				AvailabilityZones: []elbv2Types.AvailabilityZone{
+					{
+						ZoneName: aws.String("a")}}},
+			{
+				Type:            elbv2Types.LoadBalancerTypeEnumNetwork,
+				VpcId:           aws.String("vpc-1"),
+				LoadBalancerArn: aws.String("test-arn-2"),
+				AvailabilityZones: []elbv2Types.AvailabilityZone{
+					{
+						ZoneName: aws.String("b")}}},
+		}}
+	elbc := &elbv2client.FakeELBV2Client{
+		DescribeOutputs: []*elbv2.DescribeLoadBalancersOutput{outputs},
+		ErrorOnCall:     -1,
+	}
+	calc := buildCalc(&ec2client.FakeEC2Client{}, &efsclient.FakeEFSClient{}, elbc)
+	units, err := calc.calculateLoadBalancersNau(ctx, "vpc-1")
+	assert.NoError(t, err)
+	// Only one matching AZ * weight
+	expected := int64(1) * int64(calc.wt.Get(NetworkLoadBalancerPerAZ))
+	assert.Equal(t, expected, units)
+}
+
+func TestGetRegion_FromClients(t *testing.T) {
+	// Verify that GetRegion returns the EC2 client region
+	ec2c := &ec2client.FakeEC2Client{Region: "us-west-2"}
+	calc := buildCalc(ec2c, &efsclient.FakeEFSClient{Region: "us-west-2"}, &elbv2client.FakeELBV2Client{Region: "us-west-2"})
+	assert.Equal(t, "us-west-2", calc.GetRegion())
+}
+
+func TestWeightTable_AllKeysPresent(t *testing.T) {
+	wt := NewWeightTable()
+	// ensure every ResourceKey has a non-zero weight
+	expectedKeys := []ResourceKey{IPv4IPv6Address, ENI, PrefixAssignedToENI, NetworkLoadBalancerPerAZ,
+		GatewayLoadBalancerPerAZ, VPCEndpointPerAZ, TransitGatewayAttachment, LambdaFunction,
+		NATGateway, EFSMountTarget, EFAInterface, EKSPod}
+	for _, k := range expectedKeys {
+		w := wt.Get(k)
+		assert.Greater(t, w, 0, "weight for key %s should be >0", k)
 	}
 }

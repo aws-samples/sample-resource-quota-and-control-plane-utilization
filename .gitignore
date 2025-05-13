@@ -16,9 +16,10 @@
 /build
 /_build
 /artifact
-cmd/eventgenerator
+eventgenerator/
 .aws-sam/
 *.toml
+package/
 
 # OS files
 *.DS_Store
