@@ -43,6 +43,9 @@ func MakeFlushFunc[T any](
 
 		// 2) Sort them by Timestamp ascending to satisfy CloudWatch Logs requirement
 		sort.Slice(events, func(i, j int) bool {
+			if events[i].Timestamp == nil || events[j].Timestamp == nil {
+				return false
+			}
 			return *events[i].Timestamp < *events[j].Timestamp
 		})
 

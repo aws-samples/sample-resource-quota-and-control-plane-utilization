@@ -130,7 +130,7 @@ func (fb *CTFileBatcher) Add(ctx context.Context, region string, ct sharedtypes.
 
 	// 3) write new EMF JSON to file
 	path := filepath.Join(fb.baseDir, fmt.Sprintf("emf_%s.ndjson", region))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		fb.logger.Error("unable to open file for region %s: %v", region, err)
 		return

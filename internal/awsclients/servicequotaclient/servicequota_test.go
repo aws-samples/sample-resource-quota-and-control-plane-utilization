@@ -1,4 +1,4 @@
-package servicequotaclient_test
+package servicequotaclient
 
 import (
 	"context"
@@ -6,37 +6,65 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
-
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/stretchr/testify/assert"
 )
 
-// TestNewServiceQuotaClient tests the creation of a new service quota client successfully
-func TestNewServiceQuotaClient(t *testing.T) {
-	// Create a new service quota client
-	client, err := servicequotaclient.NewServiceQuotaClient(aws.Config{}, "us-east-1")
-	assert.NoError(t, err, "error creating service quota client")
-	assert.NotNil(t, client, "service quota client is nil")
-	assert.IsType(t, &servicequotaclient.ServiceQuotasImpl{}, client, "client is not of type ServiceQuotaClient")
+// TestNewServiceQuotasClient tests the NewServiceQuotasClient function
+func TestNewServiceQuotasClient(t *testing.T) {
+	tests := []struct {
+		name        string
+		region      string
+		expectError bool
+	}{
+		{
+			name:        "Valid region",
+			region:      "us-east-1",
+			expectError: false,
+		},
+		{
+			name:        "Invalid region",
+			region:      "invalid-region",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := servicequotas.NewFromConfig(aws.Config{})
+			serviceQuotaClient, err := NewServiceQuotaClient(client, tt.region)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Nil(t, serviceQuotaClient)
+				assert.Contains(t, err.Error(), "invalid region")
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, serviceQuotaClient)
+				assert.Equal(t, tt.region, serviceQuotaClient.GetRegion())
+			}
+		})
+	}
 }
 
-// TestNewServiceQuotaClientError tests the creation of a new service quota client with an invalid region
-func TestNewServiceQuotaClientError(t *testing.T) {
-	// Create a new service quota client
-	client, err := servicequotaclient.NewServiceQuotaClient(aws.Config{}, "invalid-region")
-	assert.Error(t, err, "error creating service quota client")
-	assert.Nil(t, client, "service quota client is not nil")
+// TestServiceQuotasImpl_GetRegion tests the GetRegion method
+func TestServiceQuotasImpl_GetRegion(t *testing.T) {
+	region := "us-west-2"
+	client := &serviceQuotasImpl{
+		region: region,
+	}
+
+	assert.Equal(t, region, client.GetRegion())
 }
 
-// TestGetServiceQuota tests GetServiceQuota interface method
-func TestGetServiceQuotaInterface(t *testing.T) {
-	// Create a new service quota client
-	client, err := servicequotaclient.NewServiceQuotaClient(aws.Config{}, "us-east-1")
-	assert.NoError(t, err, "error creating service quota client")
+// TestServiceQuotasImpl_GetServiceQuota tests the GetServiceQuota method
+func TestServiceQuotasImpl_GetServiceQuota(t *testing.T) {
+	serviceQuotaClient := servicequotas.NewFromConfig(aws.Config{})
+	client := serviceQuotasImpl{
+		client: serviceQuotaClient,
+	}
+	ctx := context.Background()
+	input := &servicequotas.GetServiceQuotaInput{}
 
-	// Get a service quota
-	quota, err := client.GetServiceQuota(context.Background(), &servicequotas.GetServiceQuotaInput{})
-	assert.Error(t, err, "should error getting service quota")
-	assert.IsType(t, &servicequotas.GetServiceQuotaOutput{}, quota, "quota is not of type ServiceQuota")
-	assert.Equal(t, "us-east-1", client.GetRegion(), "region is not us-east-1")
+	output, err := client.GetServiceQuota(ctx, input)
+	assert.Error(t, err, "client is nil, should return error")
+	assert.Nil(t, output, "output should be nil")
 }

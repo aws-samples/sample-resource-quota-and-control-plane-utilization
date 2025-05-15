@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
+	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/factory"
 	metricemfbatcher "github.com/outofoffice3/aws-samples/geras/internal/emfbatcher/metrics"
 	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
@@ -28,7 +28,7 @@ const (
 
 // ResourceQuotaHandler handles scheduled events
 type ResourceQuotaHandler struct {
-	ClientFactory                    cwlclient.ClientFactory
+	ClientFactory                    factory.ClientFactory
 	CloudwatchLogGroup               string
 	CloudWatchLogGroupStream         string
 	Namespace                        string
@@ -39,7 +39,7 @@ type ResourceQuotaHandler struct {
 }
 
 type ResourceQuotaHandlerConfig struct {
-	ClientFactory                    cwlclient.ClientFactory
+	ClientFactory                    factory.ClientFactory
 	CloudwatchLogGroup               string
 	CloudWatchLogGroupStream         string
 	Namespace                        string

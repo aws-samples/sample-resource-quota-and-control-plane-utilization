@@ -69,7 +69,7 @@ Resources:
       Targets:
         - Id: ToSQS
           Arn: !GetAtt EventsQueue.Arn
-          InputPath: "$.detail"
+          InputPath: "$.detail.$"
           SqsParameters:
             MessageGroupId: "assume-role-group"
           RoleArn: !GetAtt  EventBridgeDeliveryRole.Arn

@@ -1,3 +1,4 @@
+// Package cwlclient provides a wrapper around AWS CloudWatch Logs SDK client
 package cwlclient
 
 import (
@@ -5,46 +6,56 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	cwlTypes "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/outofoffice3/aws-samples/geras/internal/utils"
 )
 
-// CloudWatchClient defines an interfafce for using AWS cloudwatch logs client
+const (
+	// Error message constants
+	errInvalidRegion        = "cloudwatchlogsclient creation failed. invalid region"
+	errDescribeLogGroups    = "[%s] describe log groups: %w"
+	errCreateLogGroup       = "[%s] create log group %q: %w"
+	errDescribeLogStreams   = "[%s] describe log streams: %w"
+	errCreateLogStream      = "[%s] create log stream %q: %w"
+	errClientInit           = "[%s] client init: %w"
+)
+
+// CloudWatchLogsClient defines an interface for interacting with AWS CloudWatch Logs service
 type CloudWatchLogsClient interface {
+	// GetRegion returns the AWS region this client is configured for
 	GetRegion() string
-	// PutLogEvents puts logs events into cloudwatch in batches
+	// PutLogEvents sends log events to CloudWatch Logs in batches
 	PutLogEvents(ctx context.Context, params *cloudwatchlogs.PutLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutLogEventsOutput, error)
-	// Create log group creates log group
+	// CreateLogGroup creates a new log group in CloudWatch Logs
 	CreateLogGroup(ctx context.Context, params *cloudwatchlogs.CreateLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogGroupOutput, error)
-	// DescribeLogGroups describes log groups
+	// DescribeLogGroups retrieves information about log groups in CloudWatch Logs
 	DescribeLogGroups(ctx context.Context, params *cloudwatchlogs.DescribeLogGroupsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogGroupsOutput, error)
-	// Describe Log streams
+	// DescribeLogStreams retrieves information about log streams in a log group
 	DescribeLogStreams(ctx context.Context, params *cloudwatchlogs.DescribeLogStreamsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogStreamsOutput, error)
-	// Create Log stream
+	// CreateLogStream creates a new log stream in a log group
 	CreateLogStream(ctx context.Context, params *cloudwatchlogs.CreateLogStreamInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogStreamOutput, error)
 }
 
 // CloudWatchLogsClientImpl implements the CloudWatchLogsClient interface
 type CloudWatchLogsClientImpl struct {
+	// region is the AWS region this client is configured for
 	region string
+	// client is the underlying AWS CloudWatch Logs SDK client
 	client *cloudwatchlogs.Client
 }
 
 // NewCloudWatchLogsClient creates a new CloudWatchLogsClient
-func NewCloudWatchLogsClient(cfg aws.Config, region string) (CloudWatchLogsClient, error) {
+func NewCloudWatchLogsClient(client *cloudwatchlogs.Client, region string) (CloudWatchLogsClient, error) {
 	// validate region
 	if !utils.IsValidRegion(region) {
-		return nil, errors.New("cloudwatchlogsclient creation failed. invalid region")
+		return nil, errors.New(errInvalidRegion)
 	}
 
-	client := cloudwatchlogs.NewFromConfig(cfg, func(o *cloudwatchlogs.Options) {
-		o.Region = region
-	})
 	return &CloudWatchLogsClientImpl{
 		client: client,
-		region: region}, nil
+		region: region,
+	}, nil
 }
 
 // PutLogEvents puts logs events into cloudwatch in batches
@@ -62,21 +73,23 @@ func (c *CloudWatchLogsClientImpl) DescribeLogGroups(ctx context.Context, params
 	return c.client.DescribeLogGroups(ctx, params, optFns...)
 }
 
-// get region
+// GetRegion returns the AWS region this client is configured for
 func (c *CloudWatchLogsClientImpl) GetRegion() string {
 	return c.region
 }
 
+// DescribeLogStreams retrieves information about log streams in a log group
 func (c *CloudWatchLogsClientImpl) DescribeLogStreams(ctx context.Context, params *cloudwatchlogs.DescribeLogStreamsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogStreamsOutput, error) {
 	return c.client.DescribeLogStreams(ctx, params, optFns...)
 }
 
+// CreateLogStream creates a new log stream in a log group
 func (c *CloudWatchLogsClientImpl) CreateLogStream(ctx context.Context, params *cloudwatchlogs.CreateLogStreamInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogStreamOutput, error) {
 	return c.client.CreateLogStream(ctx, params, optFns...)
 }
 
-// / EnsureLogGroupExists will page through DescribeLogGroups via
-// the SDK‐provided paginator, and CreateLogGroup if no exact match.
+// EnsureLogGroupExists checks if a log group exists and creates it if not found
+// It pages through DescribeLogGroups via the SDK-provided paginator, and calls CreateLogGroup if no exact match is found
 func EnsureLogGroupExists(ctx context.Context, client CloudWatchLogsClient, groupName string) error {
 	paginator := cloudwatchlogs.NewDescribeLogGroupsPaginator(client, &cloudwatchlogs.DescribeLogGroupsInput{
 		LogGroupNamePrefix: &groupName,
@@ -84,7 +97,7 @@ func EnsureLogGroupExists(ctx context.Context, client CloudWatchLogsClient, grou
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return fmt.Errorf("[%s] describe log groups: %w", client.GetRegion(), err)
+			return fmt.Errorf(errDescribeLogGroups, client.GetRegion(), err)
 		}
 		for _, g := range page.LogGroups {
 			if *g.LogGroupName == groupName {
@@ -99,15 +112,15 @@ func EnsureLogGroupExists(ctx context.Context, client CloudWatchLogsClient, grou
 		var existsErr *cwlTypes.ResourceAlreadyExistsException
 		var abortedErr *cwlTypes.OperationAbortedException
 		if errors.As(err, &existsErr) || errors.As(err, &abortedErr) {
-			return nil // race condition—group was created by XXXXXXX process
+			return nil // race condition—group was created by another process
 		}
-		return fmt.Errorf("[%s] create log group %q: %w", client.GetRegion(), groupName, err)
+		return fmt.Errorf(errCreateLogGroup, client.GetRegion(), groupName, err)
 	}
 	return nil
 }
 
-// EnsureLogStreamExists will page through DescribeLogStreams via
-// the SDK paginator, and CreateLogStream if no exact match.
+// EnsureLogStreamExists checks if a log stream exists and creates it if not found
+// It pages through DescribeLogStreams via the SDK paginator, and calls CreateLogStream if no exact match is found
 func EnsureLogStreamExists(ctx context.Context, client CloudWatchLogsClient, groupName, streamName string) error {
 	paginator := cloudwatchlogs.NewDescribeLogStreamsPaginator(client, &cloudwatchlogs.DescribeLogStreamsInput{
 		LogGroupName:        &groupName,
@@ -116,7 +129,7 @@ func EnsureLogStreamExists(ctx context.Context, client CloudWatchLogsClient, gro
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return fmt.Errorf("[%s] describe log streams: %w", client.GetRegion(), err)
+			return fmt.Errorf(errDescribeLogStreams, client.GetRegion(), err)
 		}
 		for _, s := range page.LogStreams {
 			if *s.LogStreamName == streamName {
@@ -132,28 +145,27 @@ func EnsureLogStreamExists(ctx context.Context, client CloudWatchLogsClient, gro
 		var existsErr *cwlTypes.ResourceAlreadyExistsException
 		var abortedErr *cwlTypes.OperationAbortedException
 		if errors.As(err, &existsErr) || errors.As(err, &abortedErr) {
-			return nil // race condition—group was created by XXXXXXX process
+			return nil // race condition—group was created by another process
 		}
-		return fmt.Errorf("[%s] create log stream %q: %w", client.GetRegion(), streamName, err)
+		return fmt.Errorf(errCreateLogStream, client.GetRegion(), streamName, err)
 	}
 	return nil
 }
 
-// ClientFactory produces a CloudWatchLogsClient for any region.
-type ClientFactory func(region string) (CloudWatchLogsClient, error)
-
-// EnsureGroupAndStreamAcrossRegions will, for each region, spin up
-// a client via factory(), then EnsureLogGroupExists and EnsureLogStreamExists.
+// EnsureGroupAndStreamAcrossRegions creates log groups and streams across multiple regions
+// For each region, it creates a client via factory.CreateCloudWatchLogs(), then calls EnsureLogGroupExists and EnsureLogStreamExists
 func EnsureGroupAndStreamAcrossRegions(
 	ctx context.Context,
 	regions []string,
 	groupName, streamName string,
-	factory ClientFactory,
+	factory interface {
+		CreateCloudWatchLogs(region string) (CloudWatchLogsClient, error)
+	},
 ) error {
 	for _, region := range regions {
-		client, err := factory(region)
+		client, err := factory.CreateCloudWatchLogs(region)
 		if err != nil {
-			return fmt.Errorf("[%s] client init: %w", region, err)
+			return fmt.Errorf(errClientInit, region, err)
 		}
 		if err := EnsureLogGroupExists(ctx, client, groupName); err != nil {
 			return err

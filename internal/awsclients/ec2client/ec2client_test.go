@@ -1,4 +1,4 @@
-package ec2client_test
+package ec2client
 
 import (
 	"context"
@@ -6,35 +6,135 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/ec2client"
 	"github.com/stretchr/testify/assert"
 )
 
-// Test NewEc2Client
-func TestNewEc2Client_Success(t *testing.T) {
-	// Create a new Ec2Client successfully
-	ec2Client, err := ec2client.NewEc2Client(aws.Config{}, "us-east-1")
-	assert.NoError(t, err, "should not return error creating ec2 client")
-	assert.NotNil(t, ec2Client, "ec2 client should not be nil")
-	assert.IsType(t, &ec2client.Ec2ClientImpl{}, ec2Client, "ec2 client should be of type Ec2Client")
+// TestNewEc2Client tests the NewEc2Client function
+func TestNewEc2Client(t *testing.T) {
+	tests := []struct {
+		name        string
+		region      string
+		expectError bool
+	}{
+		{
+			name:        "Valid region",
+			region:      "us-east-1",
+			expectError: false,
+		},
+		{
+			name:        "Invalid region",
+			region:      "invalid-region",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := ec2.NewFromConfig(aws.Config{})
+			ec2Client, err := NewEc2Client(client, tt.region)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Nil(t, ec2Client)
+				assert.Contains(t, err.Error(), "invalid region")
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, ec2Client)
+				assert.Equal(t, tt.region, ec2Client.GetRegion())
+			}
+		})
+	}
 }
 
-// Test NewEc2Client with invalid region
-func TestNewEc2Client_InvalidRegion(t *testing.T) {
-	// Create a new Ec2Client with an invalid region
-	ec2Client, err := ec2client.NewEc2Client(aws.Config{}, "invalid-region")
-	assert.Error(t, err, "should return error creating ec2 client")
-	assert.Nil(t, ec2Client, "ec2 client should be nil")
+// TestEc2ClientImpl_GetRegion tests the GetRegion method
+func TestEc2ClientImpl_GetRegion(t *testing.T) {
+	region := "us-west-2"
+	client := &ec2ClientImpl{
+		region: region,
+	}
+
+	assert.Equal(t, region, client.GetRegion())
 }
 
-// TestDescribeNetworkInterfaces_Success
-func TestDescribeNetworkInterfaces_Success(t *testing.T) {
-	// Create a new Ec2Client
-	ec2Client, err := ec2client.NewEc2Client(aws.Config{}, "us-east-1")
-	assert.NoError(t, err, "should not return error creating ec2 client")
+// TestEc2ClientImpl_DescribeVpcs tests the DescribeVpcs method
+func TestEc2ClientImpl_DescribeVpcs(t *testing.T) {
+	ec2Client := ec2.NewFromConfig(aws.Config{})
+	client := ec2ClientImpl{
+		client: ec2Client,
+	}
+	ctx := context.Background()
+	input := &ec2.DescribeVpcsInput{}
 
-	// Describe network interfaces successfully
-	interfaces, err := ec2Client.DescribeNetworkInterfaces(context.Background(), &ec2.DescribeNetworkInterfacesInput{})
-	assert.Error(t, err, "should return error describing network interfaces")
-	assert.IsType(t, &ec2.DescribeNetworkInterfacesOutput{}, interfaces, "interfaces should be of type DescribeNetworkInterfacesOutput")
+	output, err := client.DescribeVpcs(ctx, input)
+	assert.Error(t, err, "client is nil, should return error")
+	assert.Nil(t, output, "output should be nil")
+}
+
+// TestEc2ClientImpl_DescribeNetworkInterfaces tests the DescribeNetworkInterfaces method
+func TestEc2ClientImpl_DescribeNetworkInterfaces(t *testing.T) {
+	ec2Client := ec2.NewFromConfig(aws.Config{})
+	client := ec2ClientImpl{
+		client: ec2Client,
+	}
+	ctx := context.Background()
+	input := &ec2.DescribeNetworkInterfacesInput{}
+
+	output, err := client.DescribeNetworkInterfaces(ctx, input)
+	assert.Error(t, err, "client is nil, should return error")
+	assert.Nil(t, output, "output should be nil")
+}
+
+// TestEc2ClientImpl_DescribeNatGateways tests the DescribeNatGateways method
+func TestEc2ClientImpl_DescribeNatGateways(t *testing.T) {
+	ec2Client := ec2.NewFromConfig(aws.Config{})
+	client := ec2ClientImpl{
+		client: ec2Client,
+	}
+	ctx := context.Background()
+	input := &ec2.DescribeNatGatewaysInput{}
+
+	output, err := client.DescribeNatGateways(ctx, input)
+	assert.Error(t, err, "client is nil, should return error")
+	assert.Nil(t, output, "output should be nil")
+}
+
+// TestEc2ClientImpl_DescribeVpcEndpoints tests the DescribeVpcEndpoints method
+func TestEc2ClientImpl_DescribeVpcEndpoints(t *testing.T) {
+	ec2Client := ec2.NewFromConfig(aws.Config{})
+	client := ec2ClientImpl{
+		client: ec2Client,
+	}
+	ctx := context.Background()
+	input := &ec2.DescribeVpcEndpointsInput{}
+
+	output, err := client.DescribeVpcEndpoints(ctx, input)
+	assert.Error(t, err, "client is nil, should return error")
+	assert.Nil(t, output, "output should be nil")
+}
+
+// TestEc2ClientImpl_DescribeSubnets tests the DescribeSubnets method
+func TestEc2ClientImpl_DescribeSubnets(t *testing.T) {
+	ec2Client := ec2.NewFromConfig(aws.Config{})
+	client := ec2ClientImpl{
+		client: ec2Client,
+	}
+	ctx := context.Background()
+	input := &ec2.DescribeSubnetsInput{}
+
+	output, err := client.DescribeSubnets(ctx, input)
+	assert.Error(t, err, "client is nil, should return error")
+	assert.Nil(t, output, "output should be nil")
+}
+
+// TestEc2ClientImpl_DescribeTransitGatewayVpcAttachments tests the DescribeTransitGatewayVpcAttachments method
+func TestEc2ClientImpl_DescribeTransitGatewayVpcAttachments(t *testing.T) {
+	ec2Client := ec2.NewFromConfig(aws.Config{})
+	client := ec2ClientImpl{
+		client: ec2Client,
+	}
+	ctx := context.Background()
+	input := &ec2.DescribeTransitGatewayVpcAttachmentsInput{}
+
+	output, err := client.DescribeTransitGatewayVpcAttachments(ctx, input)
+	assert.Error(t, err, "client is nil, should return error")
+	assert.Nil(t, output, "output should be nil")
 }

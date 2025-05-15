@@ -1,19 +1,14 @@
 package serviceconfig
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/s3client"
 	applogger "github.com/outofoffice3/aws-samples/geras/internal/logger"
 )
 
-// QuotaMetric reprsents an individual metric entity used for both quota and rate limits
+// QuotaMetric represents an individual metric entity used for both quota and rate limits
 type QuotaMetric struct {
 	Name string `json:"name"`
 }
@@ -52,29 +47,6 @@ func LoadConfigFromFile(filePath string, logger applogger.Logger) (*TopLevelServ
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		logger.Error("failed to unmarshal config file %q: %w", filePath, err)
 		return nil, fmt.Errorf("failed to unmarshal config file %q: %w", filePath, err)
-	}
-	return &cfg, nil
-}
-
-// LoadConfig reads the cofiguration file from S3 given the full key
-// unmarshals into a Config struct
-func LoadConfigFromS3(bucket, key string, client s3client.S3Client) (*TopLevelServiceConfig, error) {
-	data, err := client.GetObject(context.TODO(), &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file %q: %w", key, err)
-	}
-
-	dataBytes, err := io.ReadAll(data.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file %q: %w", key, err)
-	}
-
-	var cfg TopLevelServiceConfig
-	if err := json.Unmarshal(dataBytes, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config file %q: %w", key, err)
 	}
 	return &cfg, nil
 }

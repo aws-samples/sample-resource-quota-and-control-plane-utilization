@@ -184,6 +184,9 @@ func (efi *EMFFlusherImpl) Flush(ctx context.Context, region string, batch []EMF
 
 	// sort them by timestamp ascending to satisfy cloudwatchlogs requiremment
 	sort.Slice(logEvents, func(i, j int) bool {
+		if logEvents[i].Timestamp == nil || logEvents[j].Timestamp == nil {
+			return false
+		}
 		return *logEvents[i].Timestamp < *logEvents[j].Timestamp
 	})
 

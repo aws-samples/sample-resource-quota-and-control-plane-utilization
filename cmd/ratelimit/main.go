@@ -10,9 +10,8 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
+	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/factory"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf"
 	cloudtrailemfbatcher "github.com/outofoffice3/aws-samples/geras/internal/emfbatcher/cloudtrail"
 	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
@@ -130,11 +129,12 @@ func main() {
 
 	ctx := context.Background()
 
-	// load aws config
-	cfg, err := config.LoadDefaultConfig(ctx)
+	// Initialize client factory
+	clientFactory, err := factory.NewFactory(ctx, appLogger)
 	if err != nil {
 		HandleInitError(appLogger, err)
 	}
+	appLogger.Info("initialized client factory")
 
 	// we need to ensure the log groups and streams exists in all regions
 	err = cwlclient.EnsureGroupAndStreamAcrossRegions(
@@ -142,7 +142,7 @@ func main() {
 		regions,
 		cloudwatchLogGroup,
 		logStreamName,
-		makeFactory(cfg),
+		clientFactory,
 	)
 	if err != nil {
 		HandleInitError(appLogger, err)
@@ -152,7 +152,7 @@ func main() {
 	// load a safemap of cloudwatch log clients for each region
 	cwlClientMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
 	for _, region := range regions {
-		client, err := cwlclient.NewCloudWatchLogsClient(cfg, region)
+		client, err := clientFactory.CreateCloudWatchLogs(region)
 		if err != nil {
 			HandleInitError(appLogger, err)
 		}
@@ -204,16 +204,4 @@ func main() {
 func HandleInitError(logger logger.Logger, err error) {
 	logger.Error("error initializing service: %v", err)
 	os.Exit(1)
-}
-
-// re-useable function to create cloudwatch logs client
-func makeFactory(cfg aws.Config) cwlclient.ClientFactory {
-	return func(region string) (cwlclient.CloudWatchLogsClient, error) {
-		cfg.Region = region
-		client, err := cwlclient.NewCloudWatchLogsClient(cfg, region)
-		if err != nil {
-			return nil, err
-		}
-		return client, nil
-	}
 }

@@ -1,4 +1,5 @@
-// nau/calculator.go
+// Package nau provides functionality to calculate Network Address Utilization (NAU) for AWS VPCs.
+// NAU is a metric used by AWS to measure the utilization of networking resources within a VPC.
 package nau
 
 import (
@@ -11,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/efs"
 	elbv2 "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
 	elbv2Types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/ec2client"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/efsclient"
@@ -18,36 +20,51 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 )
 
-// NAUCalculator is the public interface.
+// paginationLimit defines the maximum number of results to return per page for all paginators
+const paginationLimit = 1000
+
+// NAUCalculator is the public interface for calculating Network Address Utilization.
 type NAUCalculator interface {
 	// CalculateVPCNAU returns the total NAU units for every VPC in the region.
 	CalculateVPCNAU(ctx context.Context) (map[string]int64, error)
-	// Get Region
+	// GetRegion returns the AWS region this calculator is operating in.
 	GetRegion() string
 }
 
-// ResourceKey distinguishes NAU resource types
+// ResourceKey distinguishes NAU resource types for weight calculation.
 type ResourceKey string
 
 const (
-	IPv4IPv6Address          ResourceKey = "ipv4-ipv6-address"
-	ENI                      ResourceKey = "eni"
-	PrefixAssignedToENI      ResourceKey = "prefix-assigned-to-eni"
+	// IPv4IPv6Address represents an IPv4 or IPv6 address resource.
+	IPv4IPv6Address ResourceKey = "ipv4-ipv6-address"
+	// ENI represents an Elastic Network Interface resource.
+	ENI ResourceKey = "eni"
+	// PrefixAssignedToENI represents a CIDR prefix assigned to an ENI.
+	PrefixAssignedToENI ResourceKey = "prefix-assigned-to-eni"
+	// NetworkLoadBalancerPerAZ represents a Network Load Balancer in an AZ.
 	NetworkLoadBalancerPerAZ ResourceKey = "network-load-balancer-per-az"
+	// GatewayLoadBalancerPerAZ represents a Gateway Load Balancer in an AZ.
 	GatewayLoadBalancerPerAZ ResourceKey = "gateway-load-balancer-per-az"
-	VPCEndpointPerAZ         ResourceKey = "vpc-endpoint-per-az"
+	// VPCEndpointPerAZ represents a VPC Endpoint in an AZ.
+	VPCEndpointPerAZ ResourceKey = "vpc-endpoint-per-az"
+	// TransitGatewayAttachment represents a Transit Gateway attachment.
 	TransitGatewayAttachment ResourceKey = "transit-gateway-attachment"
-	LambdaFunction           ResourceKey = "lambda-function"
-	NATGateway               ResourceKey = "nat-gateway"
-	EFSMountTarget           ResourceKey = "efs-mount-target"
-	EFAInterface             ResourceKey = "efa-interface"
-	EKSPod                   ResourceKey = "eks-pod"
+	// LambdaFunction represents a Lambda function with VPC access.
+	LambdaFunction ResourceKey = "lambda-function"
+	// NATGateway represents a NAT Gateway.
+	NATGateway ResourceKey = "nat-gateway"
+	// EFSMountTarget represents an EFS Mount Target.
+	EFSMountTarget ResourceKey = "efs-mount-target"
+	// EFAInterface represents an Elastic Fabric Adapter interface.
+	EFAInterface ResourceKey = "efa-interface"
+	// EKSPod represents an EKS Pod using VPC networking.
+	EKSPod ResourceKey = "eks-pod"
 )
 
-// WeightTable maps ResourceKey→weight
+// WeightTable maps ResourceKey to its NAU weight value.
 type WeightTable struct{ table map[ResourceKey]int }
 
-// NewWeightTable returns the AWS-documented weights.
+// NewWeightTable returns the AWS-documented weights for NAU resources.
 func NewWeightTable() *WeightTable {
 	return &WeightTable{table: map[ResourceKey]int{
 		IPv4IPv6Address:          1,
@@ -65,10 +82,10 @@ func NewWeightTable() *WeightTable {
 	}}
 }
 
-// Get returns the weight for key (zero if missing)
+// Get returns the weight for the specified resource key (zero if missing).
 func (w *WeightTable) Get(key ResourceKey) int { return w.table[key] }
 
-// calculator does the work under the hood.
+// calculator implements the NAUCalculator interface to calculate NAU values.
 type calculator struct {
 	ec2    ec2client.Ec2Client
 	efs    efsclient.EFSClient
@@ -78,7 +95,7 @@ type calculator struct {
 	region string
 }
 
-// NewCalculator wires up your AWS clients + logger.
+// NewCalculator creates a new NAUCalculator with the provided AWS clients and logger.
 func NewCalculator(
 	ec2Client ec2client.Ec2Client,
 	efsClient efsclient.EFSClient,
@@ -98,11 +115,93 @@ func NewCalculator(
 	}
 }
 
-// CalculateVPCNAU paginates every VPC then sums each resource’s NAU units.
+// nauResult holds the result of a NAU calculation with its value and potential error
+type nauResult struct {
+	value int64
+	err   error
+	name  string
+}
+
+// calculateVPCTotalNAU calculates the total NAU for a specific VPC.
+// It sums the NAU values from all resource types within the VPC using concurrent goroutines.
+func (c *calculator) calculateVPCTotalNAU(ctx context.Context, vpcID string) (int64, error) {
+	c.logger.Debug("calculating VPC %s nau's", vpcID)
+
+	g, ctx := errgroup.WithContext(ctx)
+	results := make(chan nauResult, 6) // Buffer for all calculation results
+
+	// Launch ENI calculation
+	g.Go(func() error {
+		v, err := c.calculateENINau(ctx, vpcID)
+		results <- nauResult{value: v, err: err, name: "ENI"}
+		return err
+	})
+
+	// Launch NAT Gateway calculation
+	g.Go(func() error {
+		v, err := c.calculateNATGatewayNau(ctx, vpcID)
+		results <- nauResult{value: v, err: err, name: "NAT"}
+		return err
+	})
+
+	// Launch VPC Endpoints calculation
+	g.Go(func() error {
+		v, err := c.calculateVPCEndpointsNau(ctx, vpcID)
+		results <- nauResult{value: v, err: err, name: "VPC Endpoint"}
+		return err
+	})
+
+	// Launch Load Balancers calculation
+	g.Go(func() error {
+		v, err := c.calculateLoadBalancersNau(ctx, vpcID)
+		results <- nauResult{value: v, err: err, name: "LB"}
+		return err
+	})
+
+	// Launch Transit Gateway attachments calculation
+	g.Go(func() error {
+		v, err := c.calculateTransitGatewayVpcAttachmentsNau(ctx, vpcID)
+		results <- nauResult{value: v, err: err, name: "TGW-VPC Attach"}
+		return err
+	})
+
+	// Launch EFS Mount Targets calculation
+	g.Go(func() error {
+		v, err := c.calculateEFSMountTargetsInVpcNau(ctx, vpcID)
+		results <- nauResult{value: v, err: err, name: "EFS-in-VPC"}
+		return err
+	})
+
+	// Close results channel when all goroutines complete
+	go func() {
+		g.Wait()
+		close(results)
+	}()
+
+	// Wait for all goroutines to complete or for an error
+	if err := g.Wait(); err != nil {
+		return 0, err
+	}
+
+	// Sum up all results
+	var total int64
+	for result := range results {
+		c.logger.Debug("vpcId=%s %s NAU=%d", vpcID, result.name, result.value)
+		total += result.value
+	}
+
+	c.logger.Info("vpcId %s total NAU=%d", vpcID, total)
+	return total, nil
+}
+
+// CalculateVPCNAU paginates through every VPC then sums each resource's NAU units.
+// Returns a map of VPC IDs to their total NAU values.
 func (c *calculator) CalculateVPCNAU(ctx context.Context) (map[string]int64, error) {
 	out := make(map[string]int64)
 	c.logger.Info("starting VPC discovery for vpc nau's")
-	pv := ec2.NewDescribeVpcsPaginator(c.ec2, &ec2.DescribeVpcsInput{})
+	pv := ec2.NewDescribeVpcsPaginator(c.ec2, &ec2.DescribeVpcsInput{}, func(o *ec2.DescribeVpcsPaginatorOptions) {
+		o.Limit = paginationLimit
+	})
 	for pv.HasMorePages() {
 		page, err := pv.NextPage(ctx)
 		if err != nil {
@@ -110,59 +209,24 @@ func (c *calculator) CalculateVPCNAU(ctx context.Context) (map[string]int64, err
 		}
 		for _, v := range page.Vpcs {
 			id := aws.ToString(v.VpcId)
-			c.logger.Debug("calculating VPC %s nau's", id)
-
-			var total int64
-			if v, err := c.calculateENINau(ctx, id); err != nil {
+			total, err := c.calculateVPCTotalNAU(ctx, id)
+			if err != nil {
 				return nil, err
-			} else {
-				c.logger.Debug("vpcId=%s ENI NAU=%d", id, v)
-				total += v
 			}
-			if v, err := c.calculateNATGatewayNau(ctx, id); err != nil {
-				return nil, err
-			} else {
-				c.logger.Debug("vpcId=%s  NAT NAU=%d", id, v)
-				total += v
-			}
-			if v, err := c.calculateVPCEndpointsNau(ctx, id); err != nil {
-				return nil, err
-			} else {
-				c.logger.Debug("vpcId=%s  VPC Endpoint NAU=%d", id, v)
-				total += v
-			}
-			if v, err := c.calculateLoadBalancersNau(ctx, id); err != nil {
-				return nil, err
-			} else {
-				c.logger.Debug("vpcId=%s  LB NAU=%d", id, v)
-				total += v
-			}
-			if v, err := c.calculateTransitGatewayVpcAttachmentsNau(ctx, id); err != nil {
-				return nil, err
-			} else {
-				c.logger.Debug("vpcId=%s TGW-VPC Attach NAU=%d", id, v)
-				total += v
-			}
-			if v, err := c.calculateEFSMountTargetsInVpcNau(ctx, id); err != nil {
-				return nil, err
-			} else {
-				c.logger.Debug("vpcId=%s  EFS-in-VPC NAU=%d", id, v)
-				total += v
-			}
-
-			c.logger.Info("vpdId %s total NAU=%d", id, total)
 			out[id] = total
 		}
 	}
 	return out, nil
 }
 
-//—— private helpers, each returning weighted NAU ——//
-
+// calculateENINau calculates the NAU units for Elastic Network Interfaces in a VPC.
+// This includes ENIs, Lambda functions, EFA interfaces, EKS pods, and IP addresses.
 func (c *calculator) calculateENINau(ctx context.Context, vpcID string) (int64, error) {
 	c.logger.Debug("calculating ENI NAU for vpc %s", vpcID)
 	p := ec2.NewDescribeNetworkInterfacesPaginator(c.ec2, &ec2.DescribeNetworkInterfacesInput{
 		Filters: []ec2Types.Filter{{Name: aws.String("vpc-id"), Values: []string{vpcID}}},
+	}, func(o *ec2.DescribeNetworkInterfacesPaginatorOptions) {
+		o.Limit = paginationLimit
 	})
 	var sum int64
 	for p.HasMorePages() {
@@ -205,6 +269,7 @@ func (c *calculator) calculateENINau(ctx context.Context, vpcID string) (int64, 
 	return sum, nil
 }
 
+// calculateNATGatewayNau calculates the NAU units for NAT Gateways in a VPC.
 func (c *calculator) calculateNATGatewayNau(ctx context.Context, vpcID string) (int64, error) {
 	out, err := c.ec2.DescribeNatGateways(ctx, &ec2.DescribeNatGatewaysInput{
 		Filter: []ec2Types.Filter{{Name: aws.String("vpc-id"), Values: []string{vpcID}}},
@@ -218,6 +283,8 @@ func (c *calculator) calculateNATGatewayNau(ctx context.Context, vpcID string) (
 	return units, nil
 }
 
+// calculateVPCEndpointsNau calculates the NAU units for VPC Endpoints in a VPC.
+// This accounts for interface endpoints and gateway endpoints across AZs.
 func (c *calculator) calculateVPCEndpointsNau(ctx context.Context, vpcID string) (int64, error) {
 	out, err := c.ec2.DescribeVpcEndpoints(ctx, &ec2.DescribeVpcEndpointsInput{
 		Filters: []ec2Types.Filter{{Name: aws.String("vpc-id"), Values: []string{vpcID}}},
@@ -247,6 +314,8 @@ func (c *calculator) calculateVPCEndpointsNau(ctx context.Context, vpcID string)
 	return sum, nil
 }
 
+// calculateLoadBalancersNau calculates the NAU units for Load Balancers in a VPC.
+// This includes both Network Load Balancers and Gateway Load Balancers across AZs.
 func (c *calculator) calculateLoadBalancersNau(ctx context.Context, vpcID string) (int64, error) {
 	p := elbv2.NewDescribeLoadBalancersPaginator(c.elb, &elbv2.DescribeLoadBalancersInput{})
 	var sum int64
@@ -272,9 +341,12 @@ func (c *calculator) calculateLoadBalancersNau(ctx context.Context, vpcID string
 	return sum, nil
 }
 
+// calculateTransitGatewayVpcAttachmentsNau calculates the NAU units for Transit Gateway VPC attachments.
 func (c *calculator) calculateTransitGatewayVpcAttachmentsNau(ctx context.Context, vpcID string) (int64, error) {
 	p := ec2.NewDescribeTransitGatewayVpcAttachmentsPaginator(c.ec2, &ec2.DescribeTransitGatewayVpcAttachmentsInput{
 		Filters: []ec2Types.Filter{{Name: aws.String("vpc-id"), Values: []string{vpcID}}},
+	}, func(o *ec2.DescribeTransitGatewayVpcAttachmentsPaginatorOptions) {
+		o.Limit = paginationLimit
 	})
 	var total int64
 	weight := int64(c.wt.Get(TransitGatewayAttachment))
@@ -289,6 +361,9 @@ func (c *calculator) calculateTransitGatewayVpcAttachmentsNau(ctx context.Contex
 	return total, nil
 }
 
+// calculateEFSMountTargetsInVpcNau calculates the NAU units for EFS Mount Targets in a VPC.
+// This involves finding all subnets in the VPC and then checking if any EFS mount targets
+// are in those subnets.
 func (c *calculator) calculateEFSMountTargetsInVpcNau(ctx context.Context, vpcID string) (int64, error) {
 	// 1) list subnets
 	snOut, err := c.ec2.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{
@@ -302,7 +377,9 @@ func (c *calculator) calculateEFSMountTargetsInVpcNau(ctx context.Context, vpcID
 		subnets[aws.ToString(s.SubnetId)] = struct{}{}
 	}
 	// 2) paginate filesystems → mount targets
-	fsPager := efs.NewDescribeFileSystemsPaginator(c.efs, &efs.DescribeFileSystemsInput{})
+	fsPager := efs.NewDescribeFileSystemsPaginator(c.efs, &efs.DescribeFileSystemsInput{}, func(o *efs.DescribeFileSystemsPaginatorOptions) {
+		o.Limit = paginationLimit
+	})
 	var total int64
 	for fsPager.HasMorePages() {
 		fsPage, err := fsPager.NextPage(ctx)
@@ -312,6 +389,8 @@ func (c *calculator) calculateEFSMountTargetsInVpcNau(ctx context.Context, vpcID
 		for _, fs := range fsPage.FileSystems {
 			mtPager := efs.NewDescribeMountTargetsPaginator(c.efs, &efs.DescribeMountTargetsInput{
 				FileSystemId: fs.FileSystemId,
+			}, func(o *efs.DescribeMountTargetsPaginatorOptions) {
+				o.Limit = paginationLimit
 			})
 			for mtPager.HasMorePages() {
 				mtPage, err := mtPager.NextPage(ctx)
@@ -331,6 +410,7 @@ func (c *calculator) calculateEFSMountTargetsInVpcNau(ctx context.Context, vpcID
 	return total, nil
 }
 
+// GetRegion returns the AWS region this calculator is operating in.
 func (c *calculator) GetRegion() string {
 	return c.region
 }

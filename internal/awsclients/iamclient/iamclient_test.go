@@ -1,4 +1,4 @@
-package iamclient_test
+package iamclient
 
 import (
 	"context"
@@ -6,52 +6,79 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/iamclient"
 	"github.com/stretchr/testify/assert"
 )
 
-// Test the creation of an iam client succesfully
-func TestIamClient_Success(t *testing.T) {
-	iamc, err := iamclient.NewIamClient(aws.Config{}, "us-east-1")
-	assert.NoError(t, err, "should not be error creating iam client")
-	assert.NotNil(t, iamc, "should not be nil")
-	assert.IsType(t, &iamclient.IamClientImpl{}, iamc, "should be of type IamClientImpl")
-	assert.Equal(t, "us-east-1", iamc.GetRegion(), "should be equal")
+// TestNewIamClient tests the NewIamClient function
+func TestNewIamClient(t *testing.T) {
+	tests := []struct {
+		name        string
+		region      string
+		expectError bool
+	}{
+		{
+			name:        "Valid region",
+			region:      "us-east-1",
+			expectError: false,
+		},
+		{
+			name:        "Invalid region",
+			region:      "invalid-region",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := iam.NewFromConfig(aws.Config{})
+			iamClient, err := NewIamClient(client, tt.region)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Nil(t, iamClient)
+				assert.Contains(t, err.Error(), "invalid region")
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, iamClient)
+				assert.Equal(t, tt.region, iamClient.GetRegion())
+			}
+		})
+	}
 }
 
-// Test the creation of an iam client with an invalid region
-func TestIamClient_InvalidRegion(t *testing.T) {
-	iamc, err := iamclient.NewIamClient(aws.Config{}, "invalid-region")
-	assert.Error(t, err, "should be error creating iam client")
-	assert.Nil(t, iamc, "should be nil")
+// TestIamClientImpl_GetRegion tests the GetRegion method
+func TestIamClientImpl_GetRegion(t *testing.T) {
+	region := "us-west-2"
+	client := &iamClientImpl{
+		region: region,
+	}
+
+	assert.Equal(t, region, client.GetRegion())
 }
 
-// Test ListOpenIDConnectProviders
-func TestListOpenIDConnectProviders(t *testing.T) {
-	iamc, err := iamclient.NewIamClient(aws.Config{}, "us-east-1")
-	assert.NoError(t, err, "should not be error creating iam client")
-	assert.NotNil(t, iamc, "should not be nil")
+// TestIamClientImpl_ListRoles tests the ListRoles method
+func TestIamClientImpl_ListRoles(t *testing.T) {
+	iamClient := iam.NewFromConfig(aws.Config{})
+	client := iamClientImpl{
+		client: iamClient,
+	}
+	ctx := context.Background()
+	input := &iam.ListRolesInput{}
 
-	_, err = iamc.ListOpenIDConnectProviders(context.Background(), &iam.ListOpenIDConnectProvidersInput{})
-	assert.Error(t, err, "should be error listing open id connect providers")
+	output, err := client.ListRoles(ctx, input)
+	assert.Error(t, err, "client is nil, should return error")
+	assert.Nil(t, output, "output should be nil")
 }
 
-// Test ListOpenIDConnectProviders
-func TestListOpenIDConnectProviders_Success(t *testing.T) {
-	iamc, err := iamclient.NewIamClient(aws.Config{}, "us-east-1")
-	assert.NoError(t, err, "should not be error creating iam client")
-	assert.NotNil(t, iamc, "should not be nil")
+// TestIamClientImpl_ListOpenIDConnectProviders tests the ListOpenIDConnectProviders method
+func TestIamClientImpl_ListOpenIDConnectProviders(t *testing.T) {
+	iamClient := iam.NewFromConfig(aws.Config{})
+	client := iamClientImpl{
+		client: iamClient,
+	}
+	ctx := context.Background()
+	input := &iam.ListOpenIDConnectProvidersInput{}
 
-	_, err = iamc.ListOpenIDConnectProviders(context.Background(), &iam.ListOpenIDConnectProvidersInput{})
-	assert.Error(t, err, "should be error listing open id connect providers")
-}
-
-// Test ListRoles
-func TestListRoles(t *testing.T) {
-	iamc, err := iamclient.NewIamClient(aws.Config{}, "us-east-1")
-	assert.NoError(t, err, "should not be error creating iam client")
-	assert.NotNil(t, iamc, "should not be nil")
-
-	_, err = iamc.ListRoles(context.Background(), &iam.ListRolesInput{})
-	assert.Error(t, err, "should be error listing roles")
+	output, err := client.ListOpenIDConnectProviders(ctx, input)
+	assert.Error(t, err, "client is nil, should return error")
+	assert.Nil(t, output, "output should be nil")
 }

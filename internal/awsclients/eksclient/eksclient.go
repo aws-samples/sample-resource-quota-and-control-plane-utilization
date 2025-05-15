@@ -1,45 +1,54 @@
+// Package eksclient provides a wrapper around AWS EKS SDK client
 package eksclient
 
 import (
 	"context"
 	"errors"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/outofoffice3/aws-samples/geras/internal/utils"
 )
 
-// EKSClient will define an interface for the eks service
+const (
+	// Error message constants
+	errInvalidRegion = "eksclient creation failed. invalid region"
+)
+
+// EKSClient defines an interface for interacting with AWS EKS service
 type EKSClient interface {
+	// GetRegion returns the AWS region this client is configured for
 	GetRegion() string
+	// ListClusters retrieves a list of EKS clusters in the AWS account
 	ListClusters(ctx context.Context, params *eks.ListClustersInput, optFns ...func(*eks.Options)) (*eks.ListClustersOutput, error)
 }
 
-type EKSClientImpl struct {
+// eksClientimpl implements the EKSClient interface
+type eksClientimpl struct {
+	// client is the underlying AWS EKS SDK client
 	client *eks.Client
+	// region is the AWS region this client is configured for
 	region string
 }
 
 // NewEKSClient will create a new EKSClient
-func NewEKSClient(cfg aws.Config, region string) (EKSClient, error) {
+func NewEKSClient(client *eks.Client, region string) (EKSClient, error) {
 	// validate the region
 	if !utils.IsValidRegion(region) {
-		return nil, errors.New("eksclient creation failed. invalid region")
+		return nil, errors.New(errInvalidRegion)
 	}
 
-	eksclient := eks.NewFromConfig(cfg, func(o *eks.Options) {
-		o.Region = region
-	})
-	return &EKSClientImpl{
-		client: eksclient,
+	return &eksClientimpl{
+		client: client,
 		region: region,
 	}, nil
 }
 
-func (e *EKSClientImpl) ListClusters(ctx context.Context, params *eks.ListClustersInput, optFns ...func(*eks.Options)) (*eks.ListClustersOutput, error) {
+// ListClusters retrieves a list of EKS clusters in the AWS account
+func (e *eksClientimpl) ListClusters(ctx context.Context, params *eks.ListClustersInput, optFns ...func(*eks.Options)) (*eks.ListClustersOutput, error) {
 	return e.client.ListClusters(ctx, params, optFns...)
 }
 
-func (e *EKSClientImpl) GetRegion() string {
+// GetRegion returns the AWS region this client is configured for
+func (e *eksClientimpl) GetRegion() string {
 	return e.region
 }

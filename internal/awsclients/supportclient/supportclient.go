@@ -1,12 +1,17 @@
+// Package supportclient provides a wrapper around AWS Support SDK client
 package supportclient
 
 import (
 	"context"
 	"errors"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/support"
 	"github.com/outofoffice3/aws-samples/geras/internal/utils"
+)
+
+const (
+	// Error message constants
+	errInvalidRegion = "supportclient creation failed. invalid region"
 )
 
 // SupportClient defines an interface for using AWS Trusted Advisor Client
@@ -15,37 +20,32 @@ type SupportClient interface {
 	RefreshTrustedAdvisorCheck(ctx context.Context, params *support.RefreshTrustedAdvisorCheckInput, optFns ...func(*support.Options)) (*support.RefreshTrustedAdvisorCheckOutput, error)
 }
 
-// SupportClientImpl implements SupportClient
-type SupportClientImpl struct {
+// supportClientImpl implements SupportClient
+type supportClientImpl struct {
 	region string          // region the client is created in
 	client *support.Client // client for using support client
 }
 
-// New creates a new SupportClientImpl
-func NewSupportClient(cfg aws.Config, region string) (SupportClient, error) {
+// NewSupportClient creates and returns a new Support client implementation
+// It validates the provided region and returns an error if invalid
+func NewSupportClient(client *support.Client, region string) (SupportClient, error) {
 	// validate region
 	if !utils.IsValidRegion(region) {
-		return nil, errors.New("supportclient creation failed. invalid region")
+		return nil, errors.New(errInvalidRegion)
 	}
 
-	// create client w/ given region
-	client := support.NewFromConfig(cfg, func(o *support.Options) {
-		o.Region = region
-	})
-
-	return &SupportClientImpl{
+	return &supportClientImpl{
 		client: client,
 		region: region,
 	}, nil
-
 }
 
-// DescribeTrustedAdvisorChecks returns a list of Trusted Advisor checks
-func (c *SupportClientImpl) RefreshTrustedAdvisorCheck(ctx context.Context, params *support.RefreshTrustedAdvisorCheckInput, optFns ...func(*support.Options)) (*support.RefreshTrustedAdvisorCheckOutput, error) {
+// RefreshTrustedAdvisorCheck requests a refresh for a Trusted Advisor check
+func (c *supportClientImpl) RefreshTrustedAdvisorCheck(ctx context.Context, params *support.RefreshTrustedAdvisorCheckInput, optFns ...func(*support.Options)) (*support.RefreshTrustedAdvisorCheckOutput, error) {
 	return c.client.RefreshTrustedAdvisorCheck(ctx, params, optFns...)
 }
 
 // GetRegion returns the region the client is created in
-func (c *SupportClientImpl) GetRegion() string {
+func (c *supportClientImpl) GetRegion() string {
 	return c.region
 }
