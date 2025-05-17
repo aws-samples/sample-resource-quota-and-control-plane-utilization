@@ -30,6 +30,8 @@ type Ec2Client interface {
 	DescribeSubnets(ctx context.Context, params *ec2.DescribeSubnetsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error)
 	// DescribeTransitGatewayVpcAttachments retrieves information about Transit Gateway VPC attachments
 	DescribeTransitGatewayVpcAttachments(ctx context.Context, params *ec2.DescribeTransitGatewayVpcAttachmentsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeTransitGatewayVpcAttachmentsOutput, error)
+	// Describe Availability Zones
+	DescribeAvailabilityZones(ctx context.Context, params *ec2.DescribeAvailabilityZonesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error)
 }
 
 // ec2ClientImpl implements the Ec2Client interface
@@ -87,4 +89,9 @@ func (c *ec2ClientImpl) DescribeVpcs(ctx context.Context, params *ec2.DescribeVp
 // DescribeTransitGatewayVpcAttachments retrieves information about Transit Gateway VPC attachments
 func (c *ec2ClientImpl) DescribeTransitGatewayVpcAttachments(ctx context.Context, params *ec2.DescribeTransitGatewayVpcAttachmentsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeTransitGatewayVpcAttachmentsOutput, error) {
 	return c.client.DescribeTransitGatewayVpcAttachments(ctx, params, optFns...)
+}
+
+// DescribeAvailabilityZones retrieves information about Availability Zones
+func (c *ec2ClientImpl) DescribeAvailabilityZones(ctx context.Context, params *ec2.DescribeAvailabilityZonesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error) {
+	return c.client.DescribeAvailabilityZones(ctx, params, optFns...)
 }

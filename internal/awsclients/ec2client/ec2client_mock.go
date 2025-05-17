@@ -242,6 +242,21 @@ func (f *FakeEC2Client) DescribeVpcEndpoints(
 	return &ec2.DescribeVpcEndpointsOutput{VpcEndpoints: f.VpcEndpoints}, nil
 }
 
+// DescribeAvailabilityZones
+func (f *FakeEC2Client) DescribeAvailabilityZones(
+	ctx context.Context,
+	in *ec2.DescribeAvailabilityZonesInput,
+	optFns ...func(*ec2.Options),
+) (*ec2.DescribeAvailabilityZonesOutput, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	return &ec2.DescribeAvailabilityZonesOutput{}, nil
+}
+
 // Reset clears all internal counters.
 func (f *FakeEC2Client) Reset() {
 	f.callVpcsCount = 0

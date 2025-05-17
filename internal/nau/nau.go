@@ -62,11 +62,11 @@ const (
 )
 
 // WeightTable maps ResourceKey to its NAU weight value.
-type WeightTable struct{ table map[ResourceKey]int }
+type WeightTable struct{ table map[ResourceKey]int64 }
 
 // NewWeightTable returns the AWS-documented weights for NAU resources.
 func NewWeightTable() *WeightTable {
-	return &WeightTable{table: map[ResourceKey]int{
+	return &WeightTable{table: map[ResourceKey]int64{
 		IPv4IPv6Address:          1,
 		ENI:                      1,
 		PrefixAssignedToENI:      1,
@@ -83,16 +83,17 @@ func NewWeightTable() *WeightTable {
 }
 
 // Get returns the weight for the specified resource key (zero if missing).
-func (w *WeightTable) Get(key ResourceKey) int { return w.table[key] }
+func (w *WeightTable) Get(key ResourceKey) int64 { return w.table[key] }
 
 // calculator implements the NAUCalculator interface to calculate NAU values.
 type calculator struct {
-	ec2    ec2client.Ec2Client
-	efs    efsclient.EFSClient
-	elb    elbv2client.ElbV2Client
-	logger logger.Logger
-	wt     *WeightTable
-	region string
+	ec2       ec2client.Ec2Client
+	efs       efsclient.EFSClient
+	elb       elbv2client.ElbV2Client
+	logger    logger.Logger
+	wt        *WeightTable
+	region    string
+	nauValues NAUStore
 }
 
 // NewCalculator creates a new NAUCalculator with the provided AWS clients and logger.
@@ -128,12 +129,19 @@ func (c *calculator) calculateVPCTotalNAU(ctx context.Context, vpcID string) (in
 	c.logger.Debug("calculating VPC %s nau's", vpcID)
 
 	g, ctx := errgroup.WithContext(ctx)
-	results := make(chan nauResult, 6) // Buffer for all calculation results
+	results := make(chan nauResult, 7) // Buffer for all calculation results
 
-	// Launch ENI calculation
+	// Launch Lambda calculation
 	g.Go(func() error {
-		v, err := c.calculateENINau(ctx, vpcID)
-		results <- nauResult{value: v, err: err, name: "ENI"}
+		v, err := c.calculateLambdaaNau(ctx, vpcID)
+		results <- nauResult{value: v, err: err, name: "Lambda"}
+		return err
+	})
+
+	// Laumch efa calculation
+	g.Go(func() error {
+		v, err := c.calculateEfaNau(ctx, vpcID)
+		results <- nauResult{value: v, err: err, name: "EFA"}
 		return err
 	})
 
@@ -219,106 +227,174 @@ func (c *calculator) CalculateVPCNAU(ctx context.Context) (map[string]int64, err
 	return out, nil
 }
 
-// calculateENINau calculates the NAU units for Elastic Network Interfaces in a VPC.
-// This includes ENIs, Lambda functions, EFA interfaces, EKS pods, and IP addresses.
-func (c *calculator) calculateENINau(ctx context.Context, vpcID string) (int64, error) {
-	c.logger.Debug("calculating ENI NAU for vpc %s", vpcID)
+func (c *calculator) calculateEfaNau(ctx context.Context, vpcID string) (int64, error) {
+	var sum int64
+	c.logger.Debug("calculating efa naus for vpc %s", vpcID)
 	p := ec2.NewDescribeNetworkInterfacesPaginator(c.ec2, &ec2.DescribeNetworkInterfacesInput{
-		Filters: []ec2Types.Filter{{Name: aws.String("vpc-id"), Values: []string{vpcID}}},
+		Filters: []ec2Types.Filter{
+			{Name: aws.String("vpc-id"), Values: []string{vpcID}},
+			{Name: aws.String("interface-type"), Values: []string{string(ec2Types.NetworkInterfaceTypeEfa), string(ec2Types.NetworkInterfaceTypeEfaOnly)}},
+		},
 	}, func(o *ec2.DescribeNetworkInterfacesPaginatorOptions) {
 		o.Limit = paginationLimit
 	})
-	var sum int64
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
 			return 0, err
 		}
-		for _, eni := range page.NetworkInterfaces {
-			switch eni.InterfaceType {
-			case ec2Types.NetworkInterfaceTypeLambda:
-				sum += int64(c.wt.Get(LambdaFunction))
-				c.logger.Debug("vpcId [%s] found lambda function %s, total eni naus %d", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
-				continue
-			case ec2Types.NetworkInterfaceTypeEfa, ec2Types.NetworkInterfaceTypeEfaOnly:
-				sum += int64(c.wt.Get(EFAInterface))
-				c.logger.Debug("vpcId [%s] found EFA interface %s, total eni naus %d", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
-			case ec2Types.NetworkInterfaceTypeBranch:
-				sum += int64(c.wt.Get(EKSPod))
-				c.logger.Debug("vpcId [%s] found EKS pod %s, total eni naus %d", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
-			default:
-				sum += int64(c.wt.Get(ENI))
-				c.logger.Debug("vpcId [%s] found eni %s, total eni naus %d", vpcID, aws.ToString(eni.NetworkInterfaceId), sum)
-			}
+		sum += c.wt.Get(EFAInterface) * 1
+		c.logger.Debug("vpcId [%s] found %d efa interfaces nau %d ", vpcID, len(page.NetworkInterfaces), sum)
+		continue
 
-			// IPv4/IPv6 addresses
-			for _, ip := range eni.PrivateIpAddresses {
-				sum += int64(c.wt.Get(IPv4IPv6Address))
-				c.logger.Debug("vpcId [%s] found private ipv4 %s, total eni naus %d", vpcID, aws.ToString(ip.PrivateIpAddress), sum)
-				if ip.Association != nil && ip.Association.PublicIp != nil {
-					sum += int64(c.wt.Get(IPv4IPv6Address))
-					c.logger.Debug("vpcId [%s] found public ipv4 %s, total eni naus %d", vpcID, aws.ToString(ip.Association.PublicIp), sum)
-				}
-			}
-			sum += int64(len(eni.Ipv6Addresses)) * int64(c.wt.Get(IPv4IPv6Address))
-			c.logger.Debug("vpcId [%s] found %d ipv6 addresses, total eni naus %d", vpcID, len(eni.Ipv6Addresses), sum)
-			sum += int64(len(eni.Ipv6Prefixes)+len(eni.Ipv4Prefixes)) * int64(c.wt.Get(PrefixAssignedToENI))
-			c.logger.Debug("vpcId [%s] found %d ipv6 prefixes, total eni naus %d", vpcID, len(eni.Ipv6Prefixes)+len(eni.Ipv4Prefixes), sum)
-		}
 	}
-	return sum, nil
+	efaTotal := c.nauValues.Add(vpcID, string(EFAInterface), sum)
+	return efaTotal, nil
+}
+
+func (c *calculator) calculateLambdaaNau(ctx context.Context, vpcID string) (int64, error) {
+	var sum int64
+	c.logger.Debug("calculating lambda naus for vpc %s", vpcID)
+	p := ec2.NewDescribeNetworkInterfacesPaginator(c.ec2, &ec2.DescribeNetworkInterfacesInput{
+		Filters: []ec2Types.Filter{
+			{Name: aws.String("vpc-id"), Values: []string{vpcID}},
+			{Name: aws.String("interface-type"), Values: []string{string(ec2Types.NetworkInterfaceTypeLambda)}},
+		},
+	}, func(o *ec2.DescribeNetworkInterfacesPaginatorOptions) {
+		o.Limit = paginationLimit
+	})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		sum += c.wt.Get(EFAInterface) * 1
+		c.logger.Debug("vpcId [%s] found %d lambda interfaces nau %d ", vpcID, len(page.NetworkInterfaces), sum)
+		continue
+
+	}
+	lambdaTotal := c.nauValues.Add(vpcID, string(EFAInterface), sum)
+	return lambdaTotal, nil
 }
 
 // calculateNATGatewayNau calculates the NAU units for NAT Gateways in a VPC.
 func (c *calculator) calculateNATGatewayNau(ctx context.Context, vpcID string) (int64, error) {
-	out, err := c.ec2.DescribeNatGateways(ctx, &ec2.DescribeNatGatewaysInput{
+	var sum int64
+	paginator := ec2.NewDescribeNatGatewaysPaginator(c.ec2, &ec2.DescribeNatGatewaysInput{
 		Filter: []ec2Types.Filter{{Name: aws.String("vpc-id"), Values: []string{vpcID}}},
+	}, func(o *ec2.DescribeNatGatewaysPaginatorOptions) {
+		o.Limit = paginationLimit
 	})
-	if err != nil {
-		return 0, err
+	// get all nat gateways
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		sum += c.wt.Get(NATGateway) * int64(len(output.NatGateways))
+		c.logger.Debug("vpcId [%s] found %d nat gateways nau %d ", vpcID, len(output.NatGateways), sum)
 	}
-	// NAT gateways: one per subnet
-	units := int64(c.wt.Get(NATGateway)) * int64(len(out.NatGateways))
-	c.logger.Debug("vpcId [%s] found %d nat gateways nau %d ", vpcID, len(out.NatGateways), units)
-	return units, nil
+	natgatewayNau := c.nauValues.Add(vpcID, string(NATGateway), sum)
+	c.logger.Debug("vpcId [%s] nat gateways nau %d ", vpcID, sum)
+	return natgatewayNau, nil
 }
 
 // calculateVPCEndpointsNau calculates the NAU units for VPC Endpoints in a VPC.
 // This accounts for interface endpoints and gateway endpoints across AZs.
 func (c *calculator) calculateVPCEndpointsNau(ctx context.Context, vpcID string) (int64, error) {
-	out, err := c.ec2.DescribeVpcEndpoints(ctx, &ec2.DescribeVpcEndpointsInput{
-		Filters: []ec2Types.Filter{{Name: aws.String("vpc-id"), Values: []string{vpcID}}},
+	azs, _ := c.ec2.DescribeAvailabilityZones(ctx, &ec2.DescribeAvailabilityZonesInput{
+		Filters: []ec2Types.Filter{
+			{Name: aws.String("state"), Values: []string{"available"}}},
 	})
-	if err != nil {
+	azCount := int64(len(azs.AvailabilityZones))
+	c.logger.Debug("vpcId [%s] found %d azs", vpcID, azCount)
+
+	g, ctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		_, err := c.calculateInterfaceVPCEndpointsNau(ctx, vpcID)
+		if err != nil {
+			return err
+		}
+		return err
+	})
+
+	g.Go(func() error {
+		_, err := c.calculateGatewayVPCEndpointsNau(ctx, vpcID, azCount)
+		if err != nil {
+			return err
+		}
+		return err
+	})
+
+	if err := g.Wait(); err != nil {
 		return 0, err
 	}
-	var sum int64
-	for _, ep := range out.VpcEndpoints {
-		var azCount int64
-		// interface endpoints: one subnet ID for AZ
-		if len(ep.SubnetIds) > 0 {
-			azCount = int64(len(ep.SubnetIds))
-			c.logger.Debug("vpcId [%s] found %v vpc endpoint in %d az's", vpcID, ep.VpcEndpointType, azCount)
 
-			// gateway endpoints: one route table ID per AZ
-		} else if len(ep.RouteTableIds) > 0 {
-			azCount = int64(len(ep.RouteTableIds))
-			c.logger.Debug("vpcId [%s] found %v vpc endpoint %d az's", vpcID, ep.VpcEndpointType, azCount)
-			// fallback if neither is set
-		} else {
-			azCount = 1
-		}
-		sum += azCount * int64(c.wt.Get(VPCEndpointPerAZ))
-		c.logger.Debug("vpcId [%s] vpc endpoint nau %d", vpcID, sum)
+	total, ok := c.nauValues.Get(vpcID, string(VPCEndpointPerAZ))
+	if !ok {
+		return 0, nil
 	}
-	return sum, nil
+	return total, nil
+}
+
+func (c *calculator) calculateGatewayVPCEndpointsNau(ctx context.Context, vpcID string, azCount int64) (int64, error) {
+	var sum int64
+	paginator := ec2.NewDescribeVpcEndpointsPaginator(c.ec2, &ec2.DescribeVpcEndpointsInput{
+		Filters: []ec2Types.Filter{
+			{Name: aws.String("vpc-id"), Values: []string{vpcID}},
+			{Name: aws.String("vpc-endpoint-type"), Values: []string{"Gateway"}},
+		}}, func(o *ec2.DescribeVpcEndpointsPaginatorOptions) {
+		o.Limit = paginationLimit
+	})
+	// get all gateway vpc endpoints
+	var totalNau int64
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		for _, ep := range output.VpcEndpoints {
+			sum += int64(len(ep.SubnetIds)) * int64(c.wt.Get(VPCEndpointPerAZ))
+			totalNau = c.nauValues.Add(vpcID, string(VPCEndpointPerAZ), sum)
+			c.logger.Debug("vpcId [%s] found gateway vpc endpoint %s, total vpc endpoint naus %d", vpcID, aws.ToString(ep.VpcEndpointId), totalNau)
+		}
+	}
+	return totalNau, nil
+}
+
+func (c *calculator) calculateInterfaceVPCEndpointsNau(ctx context.Context, vpcID string) (int64, error) {
+	var sum int64
+	paginator := ec2.NewDescribeVpcEndpointsPaginator(c.ec2, &ec2.DescribeVpcEndpointsInput{
+		Filters: []ec2Types.Filter{
+			{Name: aws.String("vpc-id"), Values: []string{vpcID}},
+			{Name: aws.String("vpc-endpoint-type"), Values: []string{"Interface"}},
+		}}, func(o *ec2.DescribeVpcEndpointsPaginatorOptions) {
+		o.Limit = paginationLimit
+	})
+	// get all interface vpc endpoints
+	for paginator.HasMorePages() {
+		output, err := paginator.NextPage(ctx)
+		if err != nil {
+			return 0, err
+		}
+		for _, ep := range output.VpcEndpoints {
+			sum += int64(c.wt.Get(VPCEndpointPerAZ)) * int64(len(ep.SubnetIds))
+			c.logger.Debug("vpcId [%s] found interface vpc endpoint %s, total vpc endpoint naus %d", vpcID, aws.ToString(ep.VpcEndpointId), sum)
+		}
+	}
+	interfaceNau := c.nauValues.Add(vpcID, string(VPCEndpointPerAZ), sum)
+	c.logger.Debug("vpcId [%s] interface vpc endpoint naus %d", vpcID, sum)
+	return interfaceNau, nil
 }
 
 // calculateLoadBalancersNau calculates the NAU units for Load Balancers in a VPC.
 // This includes both Network Load Balancers and Gateway Load Balancers across AZs.
 func (c *calculator) calculateLoadBalancersNau(ctx context.Context, vpcID string) (int64, error) {
-	p := elbv2.NewDescribeLoadBalancersPaginator(c.elb, &elbv2.DescribeLoadBalancersInput{})
-	var sum int64
+	p := elbv2.NewDescribeLoadBalancersPaginator(c.elb, &elbv2.DescribeLoadBalancersInput{
+		PageSize: aws.Int32(int32(paginationLimit)),
+	})
+	var sum, totalNetworkNau, totalGatewayNau int64
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
@@ -326,19 +402,27 @@ func (c *calculator) calculateLoadBalancersNau(ctx context.Context, vpcID string
 		}
 		for _, lb := range page.LoadBalancers {
 			if *lb.VpcId != vpcID {
-				c.logger.Debug("vpcId [%s] found lb %s in %s, skipping", vpcID, aws.ToString(lb.LoadBalancerArn), *lb.VpcId)
 				continue
 			}
-			weight := c.wt.Get(NetworkLoadBalancerPerAZ)
-			if lb.Type == elbv2Types.LoadBalancerTypeEnumGateway {
-				weight = c.wt.Get(GatewayLoadBalancerPerAZ)
-				c.logger.Debug("vpcId [%s] found load balancer type %s , %s", vpcID, lb.Type, *lb.LoadBalancerArn)
+			if lb.Type == elbv2Types.LoadBalancerTypeEnumNetwork {
+				weight := c.wt.Get(NetworkLoadBalancerPerAZ)
+				totalNetworkNau += weight * int64(len(lb.AvailabilityZones))
+				c.logger.Debug("vpcId [%s] found load balancer type %s, %s, total network lb naus %d", vpcID, lb.Type, *lb.LoadBalancerArn, totalNetworkNau)
+				continue
 			}
-			sum += int64(len(lb.AvailabilityZones)) * int64(weight)
-			c.logger.Debug("vpcId [%s] found load balancer %v, %s, total lb naus %d", vpcID, lb.Type, *lb.LoadBalancerArn, sum)
+			if lb.Type == elbv2Types.LoadBalancerTypeEnumGateway {
+				weight := c.wt.Get(GatewayLoadBalancerPerAZ)
+				totalGatewayNau += weight * int64(len(lb.AvailabilityZones))
+				c.logger.Debug("vpcId [%s] found load balancer type %s, %s, total gateway lb naus %d", vpcID, lb.Type, *lb.LoadBalancerArn, totalGatewayNau)
+				continue
+			}
 		}
 	}
-	return sum, nil
+	sum = totalGatewayNau + totalNetworkNau
+	c.logger.Debug("vpcId [%s] total load balancer naus %d (gateway nau : %s, network nau : %s )", vpcID, sum, totalGatewayNau, totalNetworkNau)
+	loadBalancerNau := c.nauValues.Add(vpcID, string(GatewayLoadBalancerPerAZ), sum)
+	c.logger.Debug("vpcId [%s] gateway load balancer naus %d", vpcID, loadBalancerNau)
+	return loadBalancerNau, nil
 }
 
 // calculateTransitGatewayVpcAttachmentsNau calculates the NAU units for Transit Gateway VPC attachments.
@@ -356,8 +440,10 @@ func (c *calculator) calculateTransitGatewayVpcAttachmentsNau(ctx context.Contex
 			return 0, fmt.Errorf("count TGW-VPC attachments for %s: %w", vpcID, err)
 		}
 		total += int64(len(page.TransitGatewayVpcAttachments)) * weight
+		c.logger.Debug("vpcId [%s] found %d transit gateway vpc attachments, total transit gateway naus %d", vpcID, len(page.TransitGatewayVpcAttachments), total)
 	}
-	c.logger.Debug("vpcId [%s] total tgw-vpc attachments naus %d", vpcID, total)
+	totalTransitGatewayNau := c.nauValues.Add(vpcID, string(TransitGatewayAttachment), total)
+	c.logger.Debug("vpcId [%s] total transit gateway naus %d", vpcID, totalTransitGatewayNau)
 	return total, nil
 }
 
@@ -377,9 +463,7 @@ func (c *calculator) calculateEFSMountTargetsInVpcNau(ctx context.Context, vpcID
 		subnets[aws.ToString(s.SubnetId)] = struct{}{}
 	}
 	// 2) paginate filesystems → mount targets
-	fsPager := efs.NewDescribeFileSystemsPaginator(c.efs, &efs.DescribeFileSystemsInput{}, func(o *efs.DescribeFileSystemsPaginatorOptions) {
-		o.Limit = paginationLimit
-	})
+	fsPager := efs.NewDescribeFileSystemsPaginator(c.efs, &efs.DescribeFileSystemsInput{})
 	var total int64
 	for fsPager.HasMorePages() {
 		fsPage, err := fsPager.NextPage(ctx)
@@ -389,8 +473,6 @@ func (c *calculator) calculateEFSMountTargetsInVpcNau(ctx context.Context, vpcID
 		for _, fs := range fsPage.FileSystems {
 			mtPager := efs.NewDescribeMountTargetsPaginator(c.efs, &efs.DescribeMountTargetsInput{
 				FileSystemId: fs.FileSystemId,
-			}, func(o *efs.DescribeMountTargetsPaginatorOptions) {
-				o.Limit = paginationLimit
 			})
 			for mtPager.HasMorePages() {
 				mtPage, err := mtPager.NextPage(ctx)
@@ -406,7 +488,8 @@ func (c *calculator) calculateEFSMountTargetsInVpcNau(ctx context.Context, vpcID
 			}
 		}
 	}
-	c.logger.Debug("vpcId [%s] total efs mount targets naus %v", vpcID, total)
+	efsTotal := c.nauValues.Add(vpcID, string(EFSMountTarget), total)
+	c.logger.Debug("vpcId [%s] total efs naus %d", vpcID, efsTotal)
 	return total, nil
 }
 
