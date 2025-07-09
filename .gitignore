@@ -10,6 +10,7 @@
 /bin/
 /build/
 /_build/
+/dist/
 /artifact/
 /eventgenerator/
 /package/
