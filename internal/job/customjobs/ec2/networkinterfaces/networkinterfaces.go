@@ -1,11 +1,13 @@
+// Package networkinterfaces provides a job implementation for monitoring
+// EC2 network interface usage against service quotas.
 package networkinterfaces
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	cwTypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 
@@ -13,33 +15,36 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
-// NetworkInterfaceJob will implement the Collector interface
-// Its will calculate the total amount of network interfaces in a given region
-
+// NetworkInterfaceJob monitors EC2 network interface usage against service quotas.
+// It counts all network interfaces in a region and calculates utilization percentage.
 type NetworkInterfaceJob struct {
-	ec2Client           ec2client.Ec2Client
-	serviceQuotasClient servicequotaclient.ServiceQuotasClient
-	Logger              logger.Logger
-	jobName             string
-	region              string
+	ec2Client           ec2client.Ec2Client                    // EC2 client for listing network interfaces
+	serviceQuotasClient servicequotaclient.ServiceQuotasClient // Service Quotas client for quota limits
+	Logger              logger.Logger                          // Logger instance
+	jobName             string                                 // Unique job identifier
+	region              string                                 // AWS region being monitored
 }
 
+// NetworkInterfaceJobConfig contains configuration for creating a NetworkInterfaceJob.
 type NetworkInterfaceJobConfig struct {
-	Ec2Client           ec2client.Ec2Client
-	ServiceQuotasClient servicequotaclient.ServiceQuotasClient
-	Logger              logger.Logger
+	Ec2Client           ec2client.Ec2Client                    // EC2 client for API calls
+	ServiceQuotasClient servicequotaclient.ServiceQuotasClient // Service Quotas client for limits
+	Logger              logger.Logger                          // Logger for job operations
 }
 
 const (
+	// Job and metric naming constants.
 	networkInterfaceJobPrefix = "networkInterfaces"
 	cloudwatchMetricName      = "networkInterfaces"
-	quotaCode                 = "L-DF5E4CA3"
-	servicename               = "vpc"
+	// AWS Service Quotas identifiers for network interfaces.
+	quotaCode   = "L-DF5E4CA3" // Network interfaces per region quota code
+	servicename = "vpc"        // VPC service name in Service Quotas
 )
 
+// NewNetworkInterfaceJob creates a new network interface monitoring job.
 func NewNetworkInterfaceJob(config NetworkInterfaceJobConfig) (job.Job, error) {
 	if config.Logger == nil {
 		config.Logger = &logger.NoopLogger{}
@@ -56,7 +61,9 @@ func NewNetworkInterfaceJob(config NetworkInterfaceJobConfig) (job.Job, error) {
 	return nic, nil
 }
 
-func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
+// Execute counts network interfaces and calculates quota utilization.
+// Returns a CloudWatch metric with the utilization percentage.
+func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatchMetric, error) {
 	input := &ec2.DescribeNetworkInterfacesInput{}
 	var totalCount int64 = 0
 
@@ -70,8 +77,6 @@ func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]sharedtypes.Clou
 		totalCount += int64(len(output.NetworkInterfaces))
 	}
 
-	nic.Logger.Debug("%s total count : %v", nic.jobName, totalCount)
-
 	// call servicequota api to get current quota limit for network interfaces
 	getServiceQuotaInput := &servicequotas.GetServiceQuotaInput{
 		QuotaCode:   aws.String(quotaCode),
@@ -82,27 +87,26 @@ func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]sharedtypes.Clou
 	if err != nil {
 		return nil, err
 	}
-	quotaValue := getServiceQuotaOutput.Quota.Value
-	nic.Logger.Debug("%s quota value : %v", nic.jobName, *quotaValue)
-	utilization := (float64(totalCount) / *quotaValue) * float64(100)
-	nic.Logger.Debug("%s utilization %.2f%%\n", nic.GetJobName(), utilization)
-
-	metric := sharedtypes.CloudWatchMetric{
+	quotaValue := aws.ToFloat64(getServiceQuotaOutput.Quota.Value)
+	utilization := (float64(totalCount) / quotaValue) * float64(100)
+	percent := strconv.FormatFloat(utilization, 'f', -1, 64)
+	nic.Logger.Debug("%s total=%d, quota=%.2f, utilization=%q%%", nic.GetJobName(), totalCount, quotaValue, percent)
+	metric := sharedTypes.CloudWatchMetric{
 		Name:      cloudwatchMetricName,
 		Value:     utilization,
-		Unit:      cwTypes.StandardUnitPercent,
+		Unit:      sharedTypes.UnitPercent,
 		Metadata:  nil,
 		Timestamp: time.Now(),
 	}
-	return []sharedtypes.CloudWatchMetric{metric}, nil
+	return []sharedTypes.CloudWatchMetric{metric}, nil
 }
 
-// GetJobName return the name of the job
+// GetJobName returns the unique identifier for this job.
 func (nic *NetworkInterfaceJob) GetJobName() string {
 	return nic.jobName
 }
 
-// get region
+// GetRegion returns the AWS region this job monitors.
 func (nic *NetworkInterfaceJob) GetRegion() string {
 	return nic.region
 }

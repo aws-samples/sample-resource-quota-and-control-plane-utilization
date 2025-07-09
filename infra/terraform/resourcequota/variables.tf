@@ -1,9 +1,3 @@
-variable "aws_region" {
-  description = "AWS region to deploy into"
-  type        = string
-  default     = "us-east-1"
-}
-
 variable "cloudwatch_log_group" {
   description = "CloudWatch Log Group for EMF"
   type        = string
@@ -11,44 +5,31 @@ variable "cloudwatch_log_group" {
 }
 
 variable "metric_namespace" {
-  description = "Metric Namespace for resource quota utilization"
+  description = "Metric Namespace for resource quota utilization metrics"
   type        = string
   default     = "Resource Quota Utilization"
 }
 
 variable "log_level" {
-  description = "Log level for Lambda function"
+  description = "Log level for Lambda function logging"
   type        = string
   default     = "debug"
 }
 
 variable "lambda_layer_path" {
-  description = "Path within the layer zip where your config.json lives"
+  description = "Path inside Lambda Layer where config lives"
   type        = string
   default     = "/opt/config/config.json"
 }
 
-variable "layer_s3_bucket" {
-  description = "S3 bucket containing the config layer zip"
+variable "s3_bucket_name" {
+  description = "S3 bucket to hold the resource-quota manifest"
   type        = string
-  default     = "custom-monitoring-poc"
+  default     = "resource-quota-utilization-2025"
 }
 
-variable "layer_s3_key" {
-  description = "S3 key for the config layer zip"
+variable "home_region" {
+  description = "Home region for the manifest file"
   type        = string
-  default     = "layers/layer.zip"
+  default     = "us-east-1"
 }
-
-variable "lambda_code_path" {
-  description = "Path to your compiled Go binary (zip) for the ResourceQuota function"
-  type        = string
-  default     = "../../../cmd/resourcequota/function.zip"
-}
-
-variable "lambda_handler" {
-  description = "Handler name inside your Go binary (usually 'bootstrap')"
-  type        = string
-  default     = "bootstrap"
-}
-

@@ -2,10 +2,10 @@ package oidcproviders
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	cwTypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
@@ -13,7 +13,7 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 // OIDCProvider will implement the Job interface
@@ -57,18 +57,17 @@ func NewOIDCProviderJob(config OIDCProviderJobConfig) (job.Job, error) {
 }
 
 // Execute will return the total number of OIDC providers in a given region
-func (j *OIDCProviderJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
+func (j *OIDCProviderJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatchMetric, error) {
 
 	input := &iam.ListOpenIDConnectProvidersInput{}
-	var totalCouunt int64 = 0
+	var totalCount int64 = 0
 	// make call to list oidc providers and calculate total amount
 	oidcProvidersOutput, err := j.IamClient.ListOpenIDConnectProviders(ctx, input)
 	if err != nil {
 		return nil, err
 	}
 
-	totalCouunt = int64(len(oidcProvidersOutput.OpenIDConnectProviderList))
-	j.Logger.Debug("%s total : %d", j.GetJobName(), totalCouunt)
+	totalCount = int64(len(oidcProvidersOutput.OpenIDConnectProviderList))
 
 	// get the quota for oidc providers
 	getServiceQuotaInput := &servicequotas.GetServiceQuotaInput{
@@ -80,20 +79,20 @@ func (j *OIDCProviderJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatch
 	if err != nil {
 		return nil, err
 	}
-	quotaValue := getServiceQuotaOutput.Quota.Value
-	j.Logger.Debug("%s quota : %d", j.GetJobName(), *quotaValue)
-	utilization := (float64(totalCouunt) / *quotaValue) * float64(100)
-	j.Logger.Info("%s utilization: %.2f%%", j.GetJobName(), utilization)
+	quotaValue := aws.ToFloat64(getServiceQuotaOutput.Quota.Value)
+	utilization := (float64(totalCount) / quotaValue) * float64(100)
+	percent := strconv.FormatFloat(utilization, 'f', -1, 64)
+	j.Logger.Info("%s total=%d, quota=%.2f, utilization=%q%%", j.GetJobName(), totalCount, quotaValue, percent)
 
-	meric := sharedtypes.CloudWatchMetric{
+	meric := sharedTypes.CloudWatchMetric{
 		Name:      cloudwatchMetricName,
 		Value:     utilization,
-		Unit:      cwTypes.StandardUnitPercent,
+		Unit:      sharedTypes.UnitPercent,
 		Metadata:  nil,
 		Timestamp: time.Now(),
 	}
 
-	return []sharedtypes.CloudWatchMetric{meric}, nil
+	return []sharedTypes.CloudWatchMetric{meric}, nil
 }
 
 // GetJobName will return the job name

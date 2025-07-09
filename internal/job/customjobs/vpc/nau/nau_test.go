@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	sqTypes "github.com/aws/aws-sdk-go-v2/service/servicequotas/types"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
+	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 // fakeCalc is a stub implementation of nau.NAUCalculator
@@ -23,7 +23,7 @@ type fakeCalc struct {
 	region string
 }
 
-func (f *fakeCalc) CalculateVPCNAU(ctx context.Context) (map[string]int64, error) {
+func (f *fakeCalc) CalculateNau() (map[string]int64, error) {
 	return f.out, f.err
 }
 
@@ -94,7 +94,7 @@ func TestExecute_Success(t *testing.T) {
 	for _, m := range mets {
 		// name, unit, metadata, timestamp
 		assert.Equal(t, cloudwatchMetricName, m.Name, "metric name should be constant")
-		assert.Equal(t, types.StandardUnitPercent, m.Unit, "unit should be percent")
+		assert.Equal(t, sharedtypes.UnitPercent, m.Unit, "unit should be percent")
 		v := m.Metadata["vpc"]
 		// valid vpc id
 		_, ok := outMap[v]

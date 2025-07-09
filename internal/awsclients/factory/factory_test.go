@@ -81,22 +81,6 @@ func TestClientCreation(t *testing.T) {
 			wantErr: true, // Now returns error for invalid region
 		},
 		{
-			name:   "CreateEFS with valid region",
-			region: validRegion,
-			clientFunc: func(region string) (interface{}, error) {
-				return f.CreateEFS(region)
-			},
-			wantErr: false,
-		},
-		{
-			name:   "CreateEFS with invalid region",
-			region: invalidRegion,
-			clientFunc: func(region string) (interface{}, error) {
-				return f.CreateEFS(region)
-			},
-			wantErr: true, // Now returns error for invalid region
-		},
-		{
 			name:   "CreateEKS with valid region",
 			region: validRegion,
 			clientFunc: func(region string) (interface{}, error) {
@@ -109,22 +93,6 @@ func TestClientCreation(t *testing.T) {
 			region: invalidRegion,
 			clientFunc: func(region string) (interface{}, error) {
 				return f.CreateEKS(region)
-			},
-			wantErr: true, // Now returns error for invalid region
-		},
-		{
-			name:   "CreateELBV2 with valid region",
-			region: validRegion,
-			clientFunc: func(region string) (interface{}, error) {
-				return f.CreateELBV2(region)
-			},
-			wantErr: false,
-		},
-		{
-			name:   "CreateELBV2 with invalid region",
-			region: invalidRegion,
-			clientFunc: func(region string) (interface{}, error) {
-				return f.CreateELBV2(region)
 			},
 			wantErr: true, // Now returns error for invalid region
 		},
@@ -245,14 +213,7 @@ func TestErrorHandling(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid region")
 	assert.Contains(t, err.Error(), invalidRegion)
 
-	// Test that all client creation methods return errors for invalid regions
-	_, err = f.CreateEFS(invalidRegion)
-	assert.Error(t, err)
-
 	_, err = f.CreateEKS(invalidRegion)
-	assert.Error(t, err)
-
-	_, err = f.CreateELBV2(invalidRegion)
 	assert.Error(t, err)
 
 	_, err = f.CreateIAM(invalidRegion)

@@ -1,9 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: |
-  EventBridge → SQS FIFO → 2 Go Lambdas 
-  • One FIFO queue, two EB rules → unique message groups 
-  • SQS EventSourceMappings with ReportBatchItemFailures 
+  EventBridge → SQS FIFO → 2 Go Lambdas
+  • Two FIFO queues, two EB rules → dedicated message flows
+  • Scheduled “flush” ping every minute via EventBridge → SQS
+  • SQS EventSourceMappings with ReportBatchItemFailures
 
 Globals:
   Function:
@@ -13,6 +14,11 @@ Globals:
       - arm64
 
 Parameters:
+  ExtensionBucket:
+    Type: String
+    Description: S3 bucket where emf-extension.zip is published
+    Default: custom-monitoring-poc
+
   AssumeRoleHandler:
     Type: String
     Default: bootstrap
@@ -27,7 +33,7 @@ Parameters:
     Description: Comma separated list of regions to run solution against
   LogLevel:
     Type: String
-    Default: debug
+    Default: info
     Description: Go log‐level for Lambda functions
   CloudWatchLogGroup:
     Type: String
@@ -37,24 +43,82 @@ Parameters:
     Type: String
     Default: Rate Limit
     Description: CloudWatch metric namespace
-  FlushInterval:
+  PropagateInvoker:
     Type: String
-    Default : "45"
-    Description: Interval in seconds for flushing emf records  
-
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >-
+      Set to "true" if you want IAM principal–level RPS metrics,
+      "false" for overall only.
+    ConstraintDescription: 'Must be "true" or "false".'
 
 Resources:
 
-  ### 1) FIFO Queue 
-  EventsQueue:
+  ####################################
+  # 1) FIFO Queues (one per event)  #
+  ####################################
+  AssumeRoleQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: events-queue.fifo
+      QueueName: assume-role-queue.fifo
       FifoQueue: true
       ContentBasedDeduplication: true
       VisibilityTimeout: 30
 
-  ### 2) EventBridge Rules ###
+  AssumeRoleWebIdentityQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: assume-role-web-identity-queue.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      VisibilityTimeout: 30
+
+  #########################################################
+  # 2) Scheduled flush ping rules (once per minute)       #
+  #########################################################
+  KeepAliveToAssumeRoleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: KeepAliveToAssumeRoleRule
+      EventBusName: default
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Id: FlushAssumeRoleTarget
+          Arn: !GetAtt AssumeRoleQueue.Arn
+          RoleArn: !GetAtt EventBridgeDeliveryRole.Arn
+          InputTransformer:
+            InputPathsMap:
+              scheduledTime: '$.time'
+            InputTemplate: >-
+              {"flush": true, "scheduledTime": "<scheduledTime>"}
+          SqsParameters:
+            MessageGroupId: "flush-group"
+
+  KeepAliveToWebIdentityRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: KeepAliveToWebIdentityRule
+      EventBusName: default
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Id: FlushWebIdentityTarget
+          Arn: !GetAtt AssumeRoleWebIdentityQueue.Arn
+          RoleArn: !GetAtt EventBridgeDeliveryRole.Arn
+          InputTransformer:
+            InputPathsMap:
+              scheduledTime: '$.time'
+            InputTemplate: >-
+              {"flush": true, "scheduledTime": "<scheduledTime>"}
+          SqsParameters:
+            MessageGroupId: "flush-group"
+
+  #########################################################
+  # 3) CloudTrail EventBridge rules → dedicated queues   #
+  #########################################################
   AssumeRoleRule:
     Type: AWS::Events::Rule
     Properties:
@@ -66,15 +130,16 @@ Resources:
         detail:
           eventName:
             - AssumeRole
+          awsRegion: !Split [",", !Ref Regions]
       Targets:
-        - Id: ToSQS
-          Arn: !GetAtt EventsQueue.Arn
-          InputPath: "$.detail.$"
+        - Id: ToAssumeRoleQueue
+          Arn: !GetAtt AssumeRoleQueue.Arn
+          InputPath: "$.detail"
           SqsParameters:
             MessageGroupId: "assume-role-group"
-          RoleArn: !GetAtt  EventBridgeDeliveryRole.Arn
+          RoleArn: !GetAtt EventBridgeDeliveryRole.Arn
 
-  AssumeRoleWebIdentityRule:
+  AssumeRoleWithWebIdentityRule:
     Type: AWS::Events::Rule
     Properties:
       Name: AssumeRoleWithWebIdentityRule
@@ -85,41 +150,55 @@ Resources:
         detail:
           eventName:
             - AssumeRoleWithWebIdentity
+          awsRegion: !Split [",", !Ref Regions]
       Targets:
-        - Id: ToSQS
-          Arn: !GetAtt EventsQueue.Arn
+        - Id: ToWebIdentityQueue
+          Arn: !GetAtt AssumeRoleWebIdentityQueue.Arn
           InputPath: "$.detail"
           SqsParameters:
             MessageGroupId: "assume-role-web-identity-group"
-          RoleArn: !GetAtt  EventBridgeDeliveryRole.Arn
+          RoleArn: !GetAtt EventBridgeDeliveryRole.Arn
 
-  ### 3) Allow EventBridge to send to SQS ###
-  EventsQueuePolicy:
+  ##############################################
+  # 4) Allow EventBridge to send to each queue #
+  ##############################################
+  AssumeRoleQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
       Queues:
-        - !Ref EventsQueue
+        - !Ref AssumeRoleQueue
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: AllowAssumeRole
+          - Sid: AllowEventBridgeSendToAssumeRole
             Effect: Allow
             Principal:
               Service: events.amazonaws.com
-            Action: 
-            - sqs:SendMessage
-            - sqs:SendMessageBatch
-            Resource: !GetAtt EventsQueue.Arn
-          - Sid: AllowAssumeRoleWeb
-            Effect: Allow
-            Principal:
-              Service: events.amazonaws.com
-            Action: 
-            - sqs:SendMessage
-            - sqs:SendMessageBatch
-            Resource: !GetAtt EventsQueue.Arn
+            Action:
+              - sqs:SendMessage
+              - sqs:SendMessageBatch
+            Resource: !GetAtt AssumeRoleQueue.Arn
 
-  ### 4) IAM Role for Lambdas ###
+  AssumeRoleWebIdentityQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref AssumeRoleWebIdentityQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowEventBridgeSendToWebIdentity
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - sqs:SendMessage
+              - sqs:SendMessageBatch
+            Resource: !GetAtt AssumeRoleWebIdentityQueue.Arn
+
+  ##################################
+  # 5) IAM Role for Lambda service #
+  ##################################
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -131,7 +210,6 @@ Resources:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        # Basic CloudWatch Logs permissions
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
       Policies:
@@ -145,7 +223,9 @@ Resources:
                   - logs:DescribeLogStreams
                 Resource: "*"
 
-  ### 5) Go Lambdas ###
+  ################################################
+  # 6) Go Lambdas wired to their respective SQS #
+  ################################################
   AssumeRoleFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -157,18 +237,18 @@ Resources:
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
-          REGIONS: !Ref Regions
-          LOG_LEVEL: !Ref LogLevel
-          CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
-          METRIC_NAMESPACE: !Ref MetricNamespace
-          FLUSH_INTERVAL: !Ref FlushInterval
-      Layers: 
-      - !Ref CloudTrailExtensionLayer
+          REGIONS:                 !Ref Regions
+          LOG_LEVEL:               !Ref LogLevel
+          CLOUDWATCH_LOG_GROUP:    !Ref CloudWatchLogGroup
+          METRIC_NAMESPACE:        !Ref MetricNamespace
+          PROPAGATE_INVOKER: !Ref PropagateInvoker
+      Layers:
+        - !Ref RateLimitExtensionLayer
       Events:
         SQSTrigger:
           Type: SQS
           Properties:
-            Queue: !GetAtt EventsQueue.Arn
+            Queue: !GetAtt AssumeRoleQueue.Arn
             BatchSize: 10
             FunctionResponseTypes:
               - ReportBatchItemFailures
@@ -184,32 +264,39 @@ Resources:
       Role: !GetAtt LambdaExecutionRole.Arn
       Environment:
         Variables:
-          REGIONS: !Ref Regions
-          LOG_LEVEL: !Ref LogLevel
-          CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
-          METRIC_NAMESPACE: !Ref MetricNamespace
-          FLUSH_INTERVAL: !Ref FlushInterval
-      Layers: 
-      - !Ref CloudTrailExtensionLayer
+          REGIONS:                 !Ref Regions
+          LOG_LEVEL:               !Ref LogLevel
+          CLOUDWATCH_LOG_GROUP:    !Ref CloudWatchLogGroup
+          METRIC_NAMESPACE:        !Ref MetricNamespace
+          PROPAGATE_INVOKER: !Ref PropagateInvoker
+      Layers:
+        - !Ref RateLimitExtensionLayer
       Events:
         SQSTrigger2:
           Type: SQS
           Properties:
-            Queue: !GetAtt EventsQueue.Arn
+            Queue: !GetAtt AssumeRoleWebIdentityQueue.Arn
             BatchSize: 10
             FunctionResponseTypes:
               - ReportBatchItemFailures
 
-  CloudTrailExtensionLayer: 
+  #####################################################
+  # 7) Extension Layer & EventBridge Delivery Role    #
+  #####################################################
+  RateLimitExtensionLayer:
     Type: AWS::Lambda::LayerVersion
     Properties:
-      LayerName: CloudTrailExtensionLayer
+      LayerName: RateLimitExtensionLayer
+      Description: EMF Lambda Extension for flushing any remaining EMF's from /tmp prior to shutdown
       CompatibleRuntimes:
         - provided.al2023
+      CompatibleArchitectures:
+        - arm64
       Content:
-        S3Bucket: custom-monitoring-poc
-        S3Key: layers/emf-extension.zip 
-  
+        S3Bucket: !Ref ExtensionBucket     # parameter or hard-coded bucket
+        S3Key:    emf/emf-extension.zip        # matches what `make upload` produces
+
+
   EventBridgeDeliveryRole:
     Type: AWS::IAM::Role
     Properties:
@@ -221,7 +308,7 @@ Resources:
               Service: events.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: AllowSQSSend
+        - PolicyName: AllowEventBridgeSQSSend
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -229,10 +316,13 @@ Resources:
                 Action:
                   - sqs:SendMessage
                   - sqs:SendMessageBatch
-                Resource: !GetAtt EventsQueue.Arn
+                Resource:
+                  - !GetAtt AssumeRoleQueue.Arn
+                  - !GetAtt AssumeRoleWebIdentityQueue.Arn
 
-  
-  ### 6) RPS Alarms ###
+  #############################
+  # 8) RPS Alarms (unchanged) #
+  #############################
   AssumeRoleRPSAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -243,7 +333,6 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       Threshold: 50
       Metrics:
-        # 1) raw CallCount for AssumeRole
         - Id: assumeRoleCount
           MetricStat:
             Metric:
@@ -255,7 +344,6 @@ Resources:
             Period: 60
             Stat: Sum
           ReturnData: false
-        # 2) compute RPS = assumeRoleCount / 60
         - Id: assumeRoleRps
           Expression: "assumeRoleCount / 60"
           Label: "AssumeRole RPS"
@@ -287,13 +375,14 @@ Resources:
           Label: "AssumeRoleWithWebIdentity RPS"
           ReturnData: true
 
-
-
-
 Outputs:
-  QueueUrl:
-    Description: URL of the FIFO queue
-    Value: !Ref EventsQueue
+  AssumeRoleQueueUrl:
+    Description: URL of the AssumeRole FIFO queue
+    Value: !Ref AssumeRoleQueue
+
+  AssumeRoleWebIdentityQueueUrl:
+    Description: URL of the WebIdentity FIFO queue
+    Value: !Ref AssumeRoleWebIdentityQueue
 
   AssumeRoleFunctionArn:
     Description: ARN of the AssumeRole Lambda
@@ -302,3 +391,4 @@ Outputs:
   AssumeRoleWebIdentityFunctionArn:
     Description: ARN of the AssumeRoleWithWebIdentity Lambda
     Value: !GetAtt AssumeRoleWebIdentityFunction.Arn
+

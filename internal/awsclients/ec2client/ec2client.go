@@ -1,4 +1,5 @@
-// Package ec2client provides a wrapper around AWS EC2 SDK client
+// Package ec2client provides a wrapper around the AWS EC2 SDK client
+// with region validation and interface abstraction for testing and modularity.
 package ec2client
 
 import (
@@ -10,45 +11,43 @@ import (
 )
 
 const (
-	// Error message constants
+	// Error message constants for EC2 client operations.
 	errInvalidRegion = "ec2client creation failed. invalid region"
 )
 
-// Ec2Client defines an interface for interacting with AWS EC2 service
+// Ec2Client defines an interface for AWS EC2 service operations
+// with methods commonly used for resource monitoring and NAU calculations.
 type Ec2Client interface {
-	// GetRegion returns the AWS region the client is configured for
+	// GetRegion returns the AWS region this client is configured for.
 	GetRegion() string
-	// DescribeVpcs retrieves information about VPCs in the AWS account
+	// DescribeVpcs retrieves information about VPCs in the AWS account.
 	DescribeVpcs(ctx context.Context, params *ec2.DescribeVpcsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error)
-	// DescribeNetworkInterfaces retrieves information about network interfaces in the AWS account
+	// DescribeNetworkInterfaces retrieves information about network interfaces.
 	DescribeNetworkInterfaces(ctx context.Context, params *ec2.DescribeNetworkInterfacesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error)
-	// DescribeNatGateways retrieves information about NAT gateways in the AWS account
+	// DescribeNatGateways retrieves information about NAT gateways.
 	DescribeNatGateways(ctx context.Context, params *ec2.DescribeNatGatewaysInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNatGatewaysOutput, error)
-	// DescribeVpcEndpoints retrieves information about VPC endpoints in the AWS account
+	// DescribeVpcEndpoints retrieves information about VPC endpoints.
 	DescribeVpcEndpoints(ctx context.Context, params *ec2.DescribeVpcEndpointsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVpcEndpointsOutput, error)
-	// DescribeSubnets retrieves information about subnets in the AWS account
+	// DescribeSubnets retrieves information about subnets.
 	DescribeSubnets(ctx context.Context, params *ec2.DescribeSubnetsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error)
-	// DescribeTransitGatewayVpcAttachments retrieves information about Transit Gateway VPC attachments
+	// DescribeTransitGatewayVpcAttachments retrieves Transit Gateway VPC attachment information.
 	DescribeTransitGatewayVpcAttachments(ctx context.Context, params *ec2.DescribeTransitGatewayVpcAttachmentsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeTransitGatewayVpcAttachmentsOutput, error)
-	// Describe Availability Zones
+	// DescribeAvailabilityZones retrieves information about Availability Zones.
 	DescribeAvailabilityZones(ctx context.Context, params *ec2.DescribeAvailabilityZonesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error)
 }
 
-// ec2ClientImpl implements the Ec2Client interface
+// ec2ClientImpl implements the Ec2Client interface using the AWS SDK.
 type ec2ClientImpl struct {
-	// client is the underlying AWS EC2 SDK client
-	client *ec2.Client
-	// region is the AWS region this client is configured for
-	region string
+	client *ec2.Client // Underlying AWS EC2 SDK client
+	region string      // AWS region this client is configured for
 }
 
-// DescribeNetworkInterfaces retrieves information about network interfaces in the AWS account
+// DescribeNetworkInterfaces retrieves network interface information from AWS EC2.
 func (c *ec2ClientImpl) DescribeNetworkInterfaces(ctx context.Context, params *ec2.DescribeNetworkInterfacesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error) {
 	return c.client.DescribeNetworkInterfaces(ctx, params, optFns...)
 }
 
-// NewEc2Client creates and returns a new EC2 client implementation
-// It validates the provided region and returns an error if invalid
+// NewEc2Client creates a new EC2 client wrapper with region validation.
 func NewEc2Client(client *ec2.Client, region string) (Ec2Client, error) {
 	// validate region
 	if !utils.IsValidRegion(region) {

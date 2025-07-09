@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,27 +14,28 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/factory"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf"
-	cloudtrailemfbatcher "github.com/outofoffice3/aws-samples/geras/internal/emfbatcher/cloudtrail"
+	cloudtrail "github.com/outofoffice3/aws-samples/geras/internal/emf/batch/cloudtrail"
+	"github.com/outofoffice3/aws-samples/geras/internal/emf/flusher"
 	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
-
 	"github.com/outofoffice3/aws-samples/geras/internal/handlers"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/outofoffice3/aws-samples/geras/internal/utils"
 )
 
 var (
-	RateLimitHandler    *handlers.RateLimitHandler
-	logStreamName       = utils.MakeStreamName()
-	flusherInterval     time.Duration
-	metricNameCallCount = "CallCount"
+	// Global handler for processing SQS events containing CloudTrail records
+	RateLimitHandler            *handlers.RateLimitHandler
+	logStreamName               = utils.MakeStreamName()
+	metricNameRequestsPerSecond = "RequestsPerSecond"
 )
 
 const (
-
 	// known service variables
-	maxEvents = 10000
-	maxBytes  = 1 << 20
-	overhead  = 26
+	maxEvents                   = 10000
+	maxBytes                    = 1 << 20
+	overhead                    = 26
+	LambdaInitTimestampFileName = "lambdaInitTimestamp.txt"
+	LastFlushTimestampFileName  = "lastFlushTimestamp.txt"
 
 	// environment variables
 	regionsEnv            = "REGIONS"
@@ -41,45 +43,40 @@ const (
 	cloudwatchLogGroupEnv = "CLOUDWATCH_LOG_GROUP"
 	metricNamespaceEnv    = "METRIC_NAMESPACE"
 	flushIntervalEnv      = "FLUSH_INTERVAL"
-
-	// error messages
-	ErrMsgCannotLoadEnvVar  = "cannot load env var"
-	ErrMsgServiceInitFailed = "failed to initialize service"
+	propagateInvokerEnv   = "PROPAGATE_INVOKER"
 )
 
+var (
+	// error
+	ErrCannotLoadEnvVar  = errors.New("cannot load env var")
+	ErrServiceInitFailed = errors.New("failed to initialize service")
+)
+
+// HandleRequest processes SQS events containing CloudTrail records and publishes CallCount metrics
 func HandleRequest(ctx context.Context, event events.SQSEvent) (events.SQSEventResponse, error) {
 	appLogger := logger.Get()
 	failedItems, err := RateLimitHandler.HandleEvent(ctx, event)
 	if err != nil {
-		appLogger.Error("failed to handle event", err)
+		appLogger.Error("failed to handle event: %v", err)
 		return events.SQSEventResponse{}, err
 	}
-	// if we have failed items, we need to return them
 	if len(failedItems) > 0 {
-		appLogger.Error("failed to handle some items, %v", failedItems)
+		appLogger.Error("failed to handle some items: %v", failedItems)
 		return events.SQSEventResponse{
 			BatchItemFailures: failedItems,
 		}, nil
 	}
-	appLogger.Info("successfully handled event, %v records", len(event.Records))
+	appLogger.Info("successfully handled event, %d records", len(event.Records))
 	return events.SQSEventResponse{}, nil
 }
 
 func main() {
-
-	// Here is where we will initialize the function when it cold starts
-	// 1. Intialize the logger
-	// 2. Make sure the log group and stream is set up in all regions
-	// 3. Load a map of cloudwachlog clients per region
-
-	// Intialize the logger
-	logLevelValue := strings.ToLower(os.Getenv(logLevelEnv))
+	// 1) Logger setup
+	lvl := strings.ToLower(os.Getenv(logLevelEnv))
 	var logLevel logger.LogLevel
-	switch logLevelValue {
+	switch lvl {
 	case "debug":
 		logLevel = logger.DEBUG
-	case "info":
-		logLevel = logger.INFO
 	case "warn":
 		logLevel = logger.WARN
 	case "error":
@@ -89,108 +86,92 @@ func main() {
 	}
 	logger.Init(logLevel, os.Stdout)
 	appLogger := logger.Get()
-	appLogger.Info("Initializing the function")
-	appLogger.Info("log value is %v", logLevelValue)
+	appLogger.Info("Initializing the function, log level = %s", lvl)
+	initTime := time.Now().UTC()
+	initTs := initTime.Format(time.RFC3339Nano)
+	initFile := filepath.Join(os.TempDir(), LambdaInitTimestampFileName)
+	if err := os.WriteFile(initFile, []byte(initTs), 0o644); err != nil {
+		appLogger.Error("failed to write init timestamp to file: %v", err)
+	} else {
+		appLogger.Info("wrote lambda init timestamp: %s", initTs)
+	}
 
-	// read the environment variables
+	// 2) Read required env vars
 	cloudwatchLogGroup := os.Getenv(cloudwatchLogGroupEnv)
-	// if the environment variable is not set, handle error
 	if cloudwatchLogGroup == "" {
-		HandleInitError(appLogger, errors.New(ErrMsgCannotLoadEnvVar))
+		HandleInitError(appLogger, ErrCannotLoadEnvVar)
 	}
-	appLogger.Info("loaded cloudwatch log group env var %v", cloudwatchLogGroup)
-	namespace := os.Getenv(metricNamespaceEnv)
-	// if the environment variable is not set, handle error
-	if namespace == "" {
-		HandleInitError(appLogger, errors.New(ErrMsgCannotLoadEnvVar))
-	}
-	appLogger.Info("loaded metric namespace env var %v", namespace)
+	appLogger.Info("cloudwatch log group env var value=%s", cloudwatchLogGroup)
 
-	// read the environment variables to get the regions
+	namespace := os.Getenv(metricNamespaceEnv)
+	if namespace == "" {
+		HandleInitError(appLogger, ErrCannotLoadEnvVar)
+	}
+	appLogger.Info("metric namespace env var value=%s", namespace)
+
 	rawRegions := os.Getenv(regionsEnv)
 	if rawRegions == "" {
-		HandleInitError(appLogger, errors.New(ErrMsgCannotLoadEnvVar))
+		HandleInitError(appLogger, ErrCannotLoadEnvVar)
 	}
 	regions := strings.Split(rawRegions, ",")
-	appLogger.Info("loaded regions %v", regions)
+	appLogger.Info("regions env var value=%v", regions)
 
-	// readn environment variable to get flush interval
-	rawInterval := os.Getenv(flushIntervalEnv)
-	if rawInterval == "" {
-		rawInterval = "45"
-		appLogger.Warn("flush interval not set, defaulting to 45 seconds")
-	}
-	secs, err := strconv.Atoi(rawInterval)
-	if err != nil {
-		HandleInitError(appLogger, err)
-	}
-	flusherInterval = time.Duration(secs) * time.Second
-	appLogger.Info("loaded flush interval %v", flusherInterval)
+	propagateInvoker, _ := strconv.ParseBool(os.Getenv(propagateInvokerEnv))
+	appLogger.Info("propagate invoker env var value=%s", propagateInvoker)
 
+	// 3) AWS client factory
 	ctx := context.Background()
-
-	// Initialize client factory
 	clientFactory, err := factory.NewFactory(ctx, appLogger)
 	if err != nil {
 		HandleInitError(appLogger, err)
 	}
-	appLogger.Info("initialized client factory")
 
-	// we need to ensure the log groups and streams exists in all regions
-	err = cwlclient.EnsureGroupAndStreamAcrossRegions(
-		ctx,
-		regions,
-		cloudwatchLogGroup,
-		logStreamName,
-		clientFactory,
-	)
-	if err != nil {
+	// 4) Ensure log group & stream across regions
+	if err := cwlclient.EnsureGroupAndStreamAcrossRegions(
+		ctx, regions, cloudwatchLogGroup, logStreamName, clientFactory); err != nil {
 		HandleInitError(appLogger, err)
 	}
-	appLogger.Info("log group %s and stream %s created successfully in all regions", cloudwatchLogGroup, logStreamName)
 
-	// load a safemap of cloudwatch log clients for each region
-	cwlClientMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
-	for _, region := range regions {
-		client, err := clientFactory.CreateCloudWatchLogs(region)
+	// 5) Build CWL client map
+	cwlClientMap := safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
+	for _, r := range regions {
+		client, err := clientFactory.CreateCloudWatchLogs(r)
 		if err != nil {
 			HandleInitError(appLogger, err)
 		}
-
-		// add client to map
-		cwlClientMap.Store(region, client)
-		appLogger.Info("loaded cloudwatch client for region %s", region)
+		cwlClientMap.Store(r, client)
 	}
 
-	// create emf flusher
-	// this is used to read from the /tmp and push EMF's to cloudtrail logs
-	flusher := emf.NewEMFFlusher(emf.EMFFlusherConfig{
-		CwlClientMap:  cwlClientMap,
+	// 6) Shared EMF flusher
+	flusher := emf.NewEMFFlusher(flusher.EMFFlusherConfig{
+		CwlClientMap:  &cwlClientMap,
 		LogStreamName: logStreamName,
 		LogGroupName:  cloudwatchLogGroup,
 		Logger:        appLogger,
 	})
 
-	// create cloud trail flie batchers
-	// it will ingest cloudtrail records, convert them to emf
-	// and store them in /tmp until the batch flush conditions are met
-	cloudtrailFileBatcher := cloudtrailemfbatcher.NewCTFileBatcher(cloudtrailemfbatcher.CTFileBatcherConfig{
-		ParentCtx:     ctx,
-		Namespace:     namespace,
-		MetricName:    metricNameCallCount,
-		BaseDir:       os.TempDir(),
-		MaxCount:      maxEvents,
-		MaxBytes:      maxBytes,
-		FlushInterval: flusherInterval,
-		EmfFlusher:    flusher,
-		Logger:        appLogger,
+	// 7) CloudTrail EMF batcher
+	lastFlushFile := filepath.Join(os.TempDir(), LastFlushTimestampFileName)
+	aggregator := cloudtrail.NewDefaultEMFAggregator()
+	cloudtrailBatcher := cloudtrail.NewCTFileBatcher(cloudtrail.CTFileBatcherConfig{
+		Namespace:          namespace,
+		MetricName:         metricNameRequestsPerSecond,
+		BaseDir:            os.TempDir(),
+		MaxCount:           maxEvents,
+		MaxBytes:           maxBytes,
+		LambdaInitFilePath: initFile,
+		LastFlushFilePath:  lastFlushFile,
+		PropagateInvoker:   propagateInvoker,
+		Aggregator:         aggregator,
+		EmfFlusher:         flusher,
+		Logger:             appLogger,
 	})
 
-	// initialize handler
+	// 8) RateLimit handler
 	RateLimitHandler, err = handlers.NewRateLimitHandler(handlers.RateLimitHandlerConfig{
-		CloudTrailEmfFileBatcher: cloudtrailFileBatcher,
-		Namespace:                namespace,
-		Logger:                   appLogger,
+		Batcher:   cloudtrailBatcher,
+		Namespace: namespace,
+		Logger:    appLogger,
 	})
 	if err != nil {
 		HandleInitError(appLogger, err)
@@ -200,7 +181,7 @@ func main() {
 	lambda.Start(HandleRequest)
 }
 
-// Handle Init Error
+// HandleInitError logs initialization errors and exits
 func HandleInitError(logger logger.Logger, err error) {
 	logger.Error("error initializing service: %v", err)
 	os.Exit(1)

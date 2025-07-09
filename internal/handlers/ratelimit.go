@@ -1,3 +1,4 @@
+// Package handlers provides event handlers for rate limit monitoring.
 package handlers
 
 import (
@@ -8,72 +9,61 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 
-	cloudtrailemfbatcher "github.com/outofoffice3/aws-samples/geras/internal/emfbatcher/cloudtrail"
+	"github.com/outofoffice3/aws-samples/geras/internal/emf/batch/cloudtrail"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 const (
-
-	// error msgs
-	CloudTrailEmfFileBatcherNillErrMsg = "cloudtrail emf file batcher is nil"
-	NamespaceNotSetErrMsg              = "namespace is not set"
-	StashNilErrMsg                     = "stash is nil"
+	// Error message constants for rate limit handler validation.
+	CloudTrailBatcherNilErrMsg = "cloudtrail batcher is nil"
+	NamespaceNotSetErrMsg      = "namespace is not set"
 )
 
-// RateLimitHandler handles scheduled events from EventBridge
-// and batches EMF records to CloudWatch.
+// RateLimitHandler processes SQS events containing CloudTrail data
+// and batches them into EMF records for CloudWatch metrics.
 type RateLimitHandler struct {
-	CloudTrailEmfFileBatcher cloudtrailemfbatcher.EMFFileBatcher
-	Logger                   logger.Logger
-	initialized              bool
-	Namespace                string
+	Batcher     cloudtrail.Batcher
+	Logger      logger.Logger
+	initialized bool
+	Namespace   string
 }
 
+// RateLimitHandlerConfig contains configuration parameters for RateLimitHandler.
 type RateLimitHandlerConfig struct {
-	CloudTrailEmfFileBatcher cloudtrailemfbatcher.EMFFileBatcher
-	Namespace                string
-	Logger                   logger.Logger
+	Batcher   cloudtrail.Batcher // EMF batcher for processing events
+	Namespace string             // CloudWatch metrics namespace
+	Logger    logger.Logger      // Logger for handler operations
 }
 
-// NewRateLimitHandler constructs a fully-initialized RateLimitHandler.
-func NewRateLimitHandler(
-	config RateLimitHandlerConfig,
-) (*RateLimitHandler, error) {
-	// if logger is nil set to stub logger to prevent panic
+// NewRateLimitHandler creates a new rate limit handler with validation.
+// Returns an error if required configuration is missing or invalid.
+func NewRateLimitHandler(config RateLimitHandlerConfig) (*RateLimitHandler, error) {
+	// default logger
 	if config.Logger == nil {
 		config.Logger = logger.Get()
 	}
-
-	// if client mpa is nil, throw error
-	if config.CloudTrailEmfFileBatcher == nil {
-		return nil, LogAndReturnError(sharedtypes.ErrorRecord{
-			Timestamp: time.Now(),
-			Err:       errors.New(CloudTrailEmfFileBatcherNillErrMsg),
-		}, config.Logger)
+	// validate batcher
+	if config.Batcher == nil {
+		return nil, LogAndReturnError(errors.New(CloudTrailBatcherNilErrMsg), config.Logger)
 	}
-
-	// if namespace is not set, throw error
+	// validate namespace
 	if config.Namespace == "" {
-		return nil, LogAndReturnError(sharedtypes.ErrorRecord{
-			Timestamp: time.Now(),
-			Err:       errors.New(NamespaceNotSetErrMsg),
-		}, config.Logger)
+		return nil, LogAndReturnError(errors.New(NamespaceNotSetErrMsg), config.Logger)
 	}
-
 	// construct handler
 	rlh := &RateLimitHandler{
-		CloudTrailEmfFileBatcher: config.CloudTrailEmfFileBatcher,
-		Logger:                   config.Logger,
-		Namespace:                config.Namespace,
-		initialized:              true,
+		Batcher:     config.Batcher,
+		Logger:      config.Logger,
+		Namespace:   config.Namespace,
+		initialized: true,
 	}
-	rlh.Logger.Info("RateLimitHandler initialized")
+	rlh.Logger.Info("RateLimitHandler initialized for namespace %s", config.Namespace)
 	return rlh, nil
 }
 
-// HandleEvent processes an SQS event, batching and flushing EMF records.
-// Returns a slice of failed message IDs for partial-batch retry.
+// HandleEvent processes SQS messages containing CloudTrail events or flush commands.
+// Returns failed message IDs for partial batch failure handling in Lambda.
 func (rlh *RateLimitHandler) HandleEvent(
 	ctx context.Context,
 	event events.SQSEvent,
@@ -86,6 +76,21 @@ func (rlh *RateLimitHandler) HandleEvent(
 	var failures []events.SQSBatchItemFailure
 
 	for _, msg := range event.Records {
+		// detect flush command
+		var meta struct {
+			Flush bool `json:"flush"`
+		}
+		if err := json.Unmarshal([]byte(msg.Body), &meta); err == nil && meta.Flush {
+			rlh.Logger.Info("received FLUSH event from event bridge")
+			err := rlh.Batcher.FlushAll(ctx, time.Now())
+			if err != nil {
+				rlh.Logger.Error("flush error: %v", err)
+			}
+			rlh.Logger.Info("flushed all CloudTrail EMF records due to flush message %s", msg.MessageId)
+			continue
+		}
+
+		// normal CloudTrail event
 		var ctEvent sharedtypes.CloudTrailEvent
 		if err := json.Unmarshal([]byte(msg.Body), &ctEvent); err != nil {
 			rlh.Logger.Error("failed to unmarshal SQS message %s: %v", msg.MessageId, err)
@@ -93,16 +98,16 @@ func (rlh *RateLimitHandler) HandleEvent(
 			continue
 		}
 
-		rlh.CloudTrailEmfFileBatcher.Add(ctx, ctEvent.AWSRegion, ctEvent)
-		rlh.Logger.Debug("added CloudTrail event to file batcher for region %s, message %s", ctEvent.AWSRegion, msg.MessageId)
+		// add to batcher
+		rlh.Logger.Info("received cloudtrail event=%+v", ctEvent)
+		rlh.Batcher.Add(ctx, ctEvent.AWSRegion, ctEvent)
 	}
 
 	return failures, nil
-
 }
 
-// LogAndReturnError centralizes error logging
-func LogAndReturnError(er error, applogger logger.Logger) error {
-	applogger.Error("Handler error: %v", er.Error())
-	return er
+// LogAndReturnError provides centralized error logging for handler operations.
+func LogAndReturnError(err error, applogger logger.Logger) error {
+	applogger.Error("Handler error: %v", err)
+	return err
 }

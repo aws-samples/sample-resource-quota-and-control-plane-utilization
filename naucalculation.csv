@@ -1,0 +1,13 @@
+ResourceKey,Weight,InterfaceTypes
+IPv4IPv6Address,1,"interface (primary, deviceIndex=0)"
+ENI,1,"interface (secondary, deviceIndex>0), trunk, loadBalancer, globalAcceleratorManaged"
+PrefixAssignedToENI,1,interface (with prefixes)
+EFAInterface,1,"efa, efa-only"
+EKSPod,1,branch
+NetworkLoadBalancerPerAZ,6,network-load-balancer
+GatewayLoadBalancerPerAZ,6,gateway-load-balancer
+VPCEndpointPerAZ,6,"vpc-endpoint, api-gateway-managed, aws-codestar-connections-managed, iot-rules-managed, quicksight, gateway-load-balancer-endpoint, evs, ec2-instance-connect"
+TransitGatewayAttachment,6,transit-gateway
+LambdaFunction,6,lambda
+NATGateway,6,nat-gateway
+EFSMountTarget,6,efs

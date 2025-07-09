@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	cwTypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamTypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	sqTypes "github.com/aws/aws-sdk-go-v2/service/servicequotas/types"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
+	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -166,8 +166,8 @@ func TestOIDCProviderJob_Execute(t *testing.T) {
 			if time.Since(m.Timestamp) > time.Second {
 				t.Errorf("Timestamp too old: %v", m.Timestamp)
 			}
-			if m.Unit != cwTypes.StandardUnitPercent {
-				t.Errorf("Unit = %v, want %v", m.Unit, cwTypes.StandardUnitPercent)
+			if m.Unit != sharedtypes.UnitPercent {
+				t.Errorf("Unit = %v, want %v", m.Unit, sharedtypes.UnitPercent)
 			}
 			if pct := m.Value; pct != tc.expectPct {
 				t.Errorf("Value = %.2f, want %.2f", pct, tc.expectPct)

@@ -1,45 +1,49 @@
+// Package vpcnau provides a job implementation for monitoring
+// VPC Network Address Usage (NAU) against service quotas.
 package vpcnau
 
 import (
 	"context"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	cwTypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/outofoffice3/aws-samples/geras/internal/nau"
-	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
-// VPCNAUJob computes network attachment units (NAU) per VPC
-// and emits one metric per VPC.
+// VPCNAUJob calculates Network Address Usage (NAU) for each VPC in a region
+// and generates utilization metrics against service quotas.
 type VPCNAUJob struct {
-	nauCalculator       nau.NAUCalculator
-	serviceQuotasClient servicequotaclient.ServiceQuotasClient
-	jobName             string
-	region              string
-	Logger              logger.Logger
+	nauCalculator       nau.NauCalculatorV2                    // NAU calculation engine
+	serviceQuotasClient servicequotaclient.ServiceQuotasClient // Service Quotas client for limits
+	jobName             string                                 // Unique job identifier
+	region              string                                 // AWS region being monitored
+	Logger              logger.Logger                          // Logger instance
 }
 
+// VPCNAUConfig contains configuration for creating a VPCNAUJob.
 type VPCNAUConfig struct {
-	NauCalculator       nau.NAUCalculator
-	ServiceQuotasClient servicequotaclient.ServiceQuotasClient
-	Logger              logger.Logger
+	NauCalculator       nau.NauCalculatorV2                    // NAU calculator instance
+	ServiceQuotasClient servicequotaclient.ServiceQuotasClient // Service Quotas client
+	Logger              logger.Logger                          // Logger for job operations
 }
 
 const (
-	// Prefix for the job name
+	// Job and metric naming constants.
 	VPCNAUJobPrefix      = "vpcNAU"
-	cloudwatchMetricName = "vpcNAU"
-	quotaCode            = "L-BB24F6E5"
-	serviceCode          = "vpc"
+	cloudwatchMetricName = "NetworkAddressUsage"
+	// AWS Service Quotas identifiers for VPC NAU.
+	quotaCode   = "L-BB24F6E5" // VPC network address usage quota code
+	serviceCode = "vpc"        // VPC service name in Service Quotas
 )
 
-// NewVPCNAUJob constructs a new VPCNAUJob
+// NewVPCNAUJob creates a new VPC NAU monitoring job.
 func NewVPCNAUJob(
 	config VPCNAUConfig,
 ) (job.Job, error) {
@@ -59,9 +63,11 @@ func NewVPCNAUJob(
 	return job, nil
 }
 
-func (j *VPCNAUJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
+// Execute calculates NAU for all VPCs and generates utilization metrics.
+// Returns one CloudWatch metric per VPC with utilization percentage.
+func (j *VPCNAUJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatchMetric, error) {
 	// Get the raw NAU totals per VPC
-	output, err := j.nauCalculator.CalculateVPCNAU(ctx)
+	output, err := j.nauCalculator.CalculateNau()
 	if err != nil {
 		return nil, err
 	}
@@ -84,34 +90,35 @@ func (j *VPCNAUJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric
 	if err != nil {
 		return nil, err
 	}
-	quotaValue := getServiceQuotaOutput.Quota.Value
+	quotaValue := aws.ToFloat64(getServiceQuotaOutput.Quota.Value)
 
 	// Convert to CloudWatch metrics
-	out := make([]sharedtypes.CloudWatchMetric, 0, len(keys))
+	out := make([]sharedTypes.CloudWatchMetric, 0, len(keys))
 	for _, vpcId := range keys {
-		j.Logger.Debug("%s calculating nau utilization for VPC=%s", j.GetJobName(), vpcId)
+		j.Logger.Debug("%s calculating nau utilization for %s", j.GetJobName(), vpcId)
 		vpcNAU := output[vpcId]
-		j.Logger.Debug("%s : units %d, quota value %v", j.GetJobName(), vpcNAU, *quotaValue)
-		nauUtilization := float64(vpcNAU) / float64(*quotaValue)
-		metric := sharedtypes.CloudWatchMetric{
+		j.Logger.Debug("%s : units %d, quota value %.2f", j.GetJobName(), vpcNAU, quotaValue)
+		nauUtilization := float64(vpcNAU) / float64(quotaValue)
+		metric := sharedTypes.CloudWatchMetric{
 			Name:      cloudwatchMetricName,
 			Value:     nauUtilization,
-			Unit:      cwTypes.StandardUnitPercent,
+			Unit:      sharedTypes.UnitPercent,
 			Metadata:  map[string]string{"vpc": vpcId},
 			Timestamp: now,
 		}
 		out = append(out, metric)
-		j.Logger.Debug("%s : added metric for VPC=%s → nau utilization=%v", j.GetJobName(), vpcId, nauUtilization)
+		percent := strconv.FormatFloat(nauUtilization, 'f', -1, 64)
+		j.Logger.Debug("%s : added metric for %s → nau utilization=%q%%", j.GetJobName(), vpcId, percent)
 	}
 	return out, nil
 }
 
-// GetJobName returns the job's name
+// GetJobName returns the unique identifier for this job.
 func (j *VPCNAUJob) GetJobName() string {
 	return j.jobName
 }
 
-// GetRegion returns the AWS region
+// GetRegion returns the AWS region this job monitors.
 func (j *VPCNAUJob) GetRegion() string {
 	return j.region
 }

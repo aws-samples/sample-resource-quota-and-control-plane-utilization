@@ -25,10 +25,17 @@ Parameters:
     Type: String
     Default: /opt/config/config.json
     Description: Path to Lambda layer config file
+  S3BucketName:
+    Type: String
+    Default: resource-quota-utilization-2025
+    Description: S3 Bucket name for storing the resource quota utilization manifest file
+  HomeRegion:
+    Type: String
+    Default: us-east-1
+    Description: Home AWS Region for the resource quota utilization manifest file
 
 
 Resources:
-
   ## IAM Role for Lambda execution with necessary permissions
   LambdaExecutionRole:
     Type: AWS::IAM::Role
@@ -78,23 +85,30 @@ Resources:
                   # Service Quota
                   - servicequotas:GetServiceQuota
                 Resource: '*'
+              - Effect: Allow 
+                Action: 
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource: 
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+              - Effect: Allow 
+                Action: 
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${S3BucketName}
 
 # Lambda Layer that stores the configuration for the solution
   ConfigFileLambdaLayer:
-    Type: AWS::Lambda::LayerVersion
+    Type: AWS::Serverless::LayerVersion
     Properties:
       LayerName: resource-quota-config
-      Description: Configuration for resource quota utilization solution 
-      Content:
-        S3Bucket: custom-monitoring-poc
-        S3Key: layers/layer.zip
+      ContentUri: ../../../lambda-layer/
       CompatibleArchitectures:
         - arm64
       CompatibleRuntimes:
         - provided.al2023
 
-
-  ## Go Lambda function
+ ## Go Lambda function
   ResourceQuotaFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -111,10 +125,15 @@ Resources:
           LAMBDA_LAYER_PATH: !Ref LambdaLayerPath         # if you load config from a Lambda Layer
           CLOUDWATCH_LOG_GROUP: !Ref CloudWatchLogGroup
           METRIC_NAMESPACE: !Ref MetricNamespace
-          LOG_LEVEL: !Ref LogLevel   
-  
-  
-
+          LOG_LEVEL: !Ref LogLevel 
+          S3_BUCKET: !Ref S3BucketName
+          HOME_REGION: !Ref HomeRegion
+      Events:
+        EveryFiveMinutes:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+            Enabled: true
       
 Outputs:
   ResourceQuotaFunctionArn:

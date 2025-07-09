@@ -1,0 +1,56 @@
+# Makefile
+
+# extension name (and sub-folder name under dist/)
+EXT_NAME   := emf
+
+# top-level dist dir
+DIST_DIR   := dist/$(EXT_NAME)
+
+# Where to drop the compiled assets
+BUILD_DIR  := $(DIST_DIR)/build
+EXT_DIR    := $(BUILD_DIR)/extensions
+BIN_PATH   := $(EXT_DIR)/$(EXT_NAME)
+
+# final zip name
+KEY        := $(EXT_NAME)-extension.zip
+ZIP_PATH   := $(DIST_DIR)/$(KEY)
+
+# Path to your extension’s main.go
+SRC        := cmd/emf-extension/main.go
+
+# S3 upload settings
+BUCKET ?=                # must be set when running 'upload'
+S3_PREFIX := emf
+
+.PHONY: all build package upload clean clean-dist
+
+# default: just package (upload is opt-in)
+all: package
+
+# 1) Build the Linux/ARM64 binary under dist/emf/build/extensions/emf
+build:
+	mkdir -p $(EXT_DIR)
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o $(BIN_PATH) $(SRC)
+	chmod +x $(BIN_PATH)
+
+# 2) Zip up the extensions/ tree so it contains:
+#      extensions/
+#      └── emf    ← your executable
+#    Output to dist/emf/emf-extension.zip
+package: clean build
+	cd $(BUILD_DIR) && zip -r $(abspath $(ZIP_PATH)) extensions
+
+# 3) Upload the zip to S3
+upload: package
+ifndef BUCKET
+	$(error BUCKET is not set; usage: make upload BUCKET=<your-bucket>)
+endif
+	aws s3 cp $(ZIP_PATH) s3://$(BUCKET)/$(S3_PREFIX)/$(KEY)
+
+# clean only build artifacts
+clean:
+	rm -rf $(BUILD_DIR) *.zip
+
+# clean entire dist folder
+clean-dist: 
+	rm -rf dist/$(EXT_NAME)

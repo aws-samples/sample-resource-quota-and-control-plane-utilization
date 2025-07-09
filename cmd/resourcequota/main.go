@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -9,15 +10,16 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/factory"
-	metricemfbatcher "github.com/outofoffice3/aws-samples/geras/internal/emfbatcher/metrics"
+	awsclientsFactory "github.com/outofoffice3/aws-samples/geras/internal/awsclients/factory"
+	"github.com/outofoffice3/aws-samples/geras/internal/emf"
+	"github.com/outofoffice3/aws-samples/geras/internal/emf/batch/metrics"
+	"github.com/outofoffice3/aws-samples/geras/internal/emf/flusher"
 	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
 	"github.com/outofoffice3/aws-samples/geras/internal/handlers"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/outofoffice3/aws-samples/geras/internal/nau"
 	"github.com/outofoffice3/aws-samples/geras/internal/serviceconfig"
-	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 	"github.com/outofoffice3/aws-samples/geras/internal/utils"
 
 	"github.com/outofoffice3/aws-samples/geras/internal/job/customjobs/ec2/networkinterfaces"
@@ -34,44 +36,57 @@ const (
 	logLevelEnv           = "LOG_LEVEL"
 	cloudwatchLogGroupEnv = "CLOUDWATCH_LOG_GROUP"
 	metricNamespaceEnv    = "METRIC_NAMESPACE"
+	s3BucketNameEnv       = "S3_BUCKET"
+	homeRegionEnv         = "HOME_REGION"
 
 	// Known service variables
-	maxEvents          = 10000
-	maxBytes           = 1 << 20
-	flushInterval      = 45 * time.Second
-	overhead           = 26
-	defaultWorkerCount = 4
-	defaultJobTimeout  = 120 * time.Second
+	maxEvents                 = 10000
+	maxBytes                  = 1 << 20
+	overhead                  = 26
+	defaultWorkerCount        = 4
+	defaultJobTimeout         = 120 * time.Second
+	defaultManifestBufferSize = 100
+	vpcNauManifestFilePrefix  = "vpc-network-address-usage-manifest"
+	vpcNauManifestFileName    = "naureport"
+)
 
-	// Init errors
-	ErrMsgCannotLoadEnvVar          = "cannot load env var"
-	ErrMsgLoadConfig                = "error loading config"
-	ErrMsgInvalidConfig             = "invalid config"
-	ErrMsgLoadAWSConfig             = "error loading AWS config"
-	ErrMsgEnsureLogGroup            = "error ensuring log group/stream"
-	ErrMsgCreateCWLClientForMetrics = "error creating CWL client for metrics"
-	ErrMsgInitMetricBatcher         = "error initializing metric batcher"
-	ErrMsgCreateClientFactory       = "error creating client factory"
+// Initialization errors
+var (
+	ErrCannotLoadEnvVar          = errors.New("cannot load environment variable")
+	ErrLoadConfig                = errors.New("error loading config")
+	ErrInvalidConfig             = errors.New("invalid config")
+	ErrLoadAWSConfig             = errors.New("error loading AWS config")
+	ErrEnsureLogGroup            = errors.New("error ensuring log group/stream")
+	ErrCreateCWLClientForMetrics = errors.New("error creating CloudWatch Logs client for metrics")
+	ErrInitMetricBatcher         = errors.New("error initializing metric batcher")
+	ErrCreateClientFactory       = errors.New("error creating client factory")
+)
 
-	// Create job errors
-	ErrMsgCreateNetworkInterfacesJob = "error creating EC2 job"
-	ErrMsgCreateListEKSClustersJob   = "error creating list EKS clusters job"
-	ErrMsgCreateIAMOIDCJob           = "error creating IAM OIDC job"
-	ErrMsgCreateIAMRolesJob          = "error creating IAM Roles job"
-	ErrMsgCreateGP3StorageJob        = "error creating GP3 job"
-	ErrMsgCreateVPCNAUJob            = "error creating VPC NAU job"
+// Job‐creation errors
+var (
+	ErrCreateNetworkInterfacesJob = errors.New("error creating EC2 network interfaces job")
+	ErrCreateListEKSClustersJob   = errors.New("error creating EKS list clusters job")
+	ErrCreateIAMOIDCJob           = errors.New("error creating IAM OIDC providers job")
+	ErrCreateIAMRolesJob          = errors.New("error creating IAM roles job")
+	ErrCreateGP3StorageJob        = errors.New("error creating GP3 storage job")
+	ErrCreateVPCNAUJob            = errors.New("error creating VPC NAU job")
+)
 
-	// Create handler error
-	ErrMsgCreateResourceQuotaHandler = "error creating resource quota handler"
+// Handler‐creation errors
+var (
+	ErrCreateResourceQuotaHandler = errors.New("error creating resource quota handler")
+)
 
-	// Client creation errors
-	ErrMsgCreateEC2Client          = "error creating EC2 client"
-	ErrMsgCreateEKSClient          = "error creating EKS client"
-	ErrMsgCreateIAMClient          = "error creating IAM client"
-	ErrMsgCreateSupportClient      = "error creating Support client"
-	ErrMsgCreateEFSClient          = "error creating EFS client"
-	ErrMsgCreateELBClient          = "error creating ELB client"
-	ErrMsgCreateServiceQuotaClient = "error creating Service Quota client"
+// Client‐creation errors
+var (
+	ErrCreateEC2Client          = errors.New("error creating EC2 client")
+	ErrCreateEKSClient          = errors.New("error creating EKS client")
+	ErrCreateIAMClient          = errors.New("error creating IAM client")
+	ErrCreateSupportClient      = errors.New("error creating Support client")
+	ErrCreateEFSClient          = errors.New("error creating EFS client")
+	ErrCreateELBClient          = errors.New("error creating ELB client")
+	ErrCreateServiceQuotaClient = errors.New("error creating Service Quotas client")
+	ErrCreateS3Client           = errors.New("error creating S3 client")
 )
 
 // LambdaResponse represents the response returned by the Lambda function.
@@ -81,8 +96,7 @@ type LambdaResponse struct {
 	Message string `json:"message"`
 }
 
-// HandleRequest is the entrypoint for Lambda invocations.
-// It processes CloudWatch events and coordinates resource quota monitoring.
+// HandleRequest processes scheduled CloudWatch events to monitor resource quota utilization
 func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaResponse, error) {
 	log := initLogger()
 
@@ -90,9 +104,9 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 	cloudwatchLogGroup := os.Getenv(cloudwatchLogGroupEnv)
 	if cloudwatchLogGroup == "" {
 		fatal(FatalInput{
-			Logger: log,
-			Msg:    ErrMsgCannotLoadEnvVar,
-			Err:    fmt.Errorf("cloudwatch log group is not set"),
+			Logger:  log,
+			ErrType: ErrCannotLoadEnvVar,
+			Cause:   fmt.Errorf("cloudwatch log group is not set"),
 		})
 	}
 	log.Info("loaded cloudwatch log group env var: %s", cloudwatchLogGroup)
@@ -100,17 +114,41 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 	namespace := os.Getenv(metricNamespaceEnv)
 	if namespace == "" {
 		fatal(FatalInput{
-			Logger: log,
-			Msg:    ErrMsgCannotLoadEnvVar,
-			Err:    fmt.Errorf("metric namespace is not set"),
+			Logger:  log,
+			ErrType: ErrCannotLoadEnvVar,
+			Cause:   fmt.Errorf("metric namespace is not set"),
 		})
 	}
 	log.Info("loaded metric namespace env var: %s", namespace)
 
+	s3BucketName := os.Getenv(s3BucketNameEnv)
+	if s3BucketName == "" {
+		fatal(FatalInput{
+			Logger:  log,
+			ErrType: ErrCannotLoadEnvVar,
+			Cause:   fmt.Errorf("s3 bucket name is not set"),
+		})
+	}
+
+	rawHomeRegion := os.Getenv(homeRegionEnv)
+	if rawHomeRegion == "" {
+		fatal(FatalInput{
+			Logger:  log,
+			ErrType: ErrCannotLoadEnvVar,
+			Cause:   fmt.Errorf("home region is not set"),
+		})
+	}
+	validatedHomeRegion, err := utils.ParseAwsRegion(rawHomeRegion)
+	if err != nil {
+		fatal(FatalInput{
+			Logger:  log,
+			ErrType: ErrCannotLoadEnvVar,
+			Cause:   fmt.Errorf("home region is not a valid AWS region"),
+		})
+	}
+
 	// Load service configuration from lambda layer
-	svcCfg := loadServiceConfig(LoadServiceConfigInput{
-		Logger: log,
-	})
+	svcCfg := loadServiceConfig(LoadServiceConfigInput{Logger: log})
 	if svcCfg == nil {
 		log.Error("failed to load service config")
 	} else {
@@ -118,12 +156,19 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 	}
 
 	// Initialize client factory
-	clientFactory := initClientFactory(ctx, log)
+	clientFactory, err := awsclientsFactory.InitClientFactory(ctx, log)
+	if err != nil {
+		fatal(FatalInput{
+			Logger:  log,
+			ErrType: ErrCreateClientFactory,
+			Cause:   err,
+		})
+	}
 	log.Info("initialized client factory")
 
 	regions := svcCfg.Regions
 
-	// Ensure cloudwatch log group and streams are created across all regions
+	// Ensure CloudWatch log group and streams exist in all regions
 	cloudWatchLogStream := utils.MakeStreamName()
 	ensureLogGroup(EnsureLogGroupInput{
 		Ctx:                 ctx,
@@ -133,12 +178,11 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 		ClientFactory:       clientFactory,
 		Logger:              log,
 	})
-	log.Info("cloudwatch log group %s, log stream %s successfully created in all regions", cloudwatchLogGroup, cloudWatchLogStream)
+	log.Info("cloudwatch log group %s, log stream %s successfully created in all regions",
+		cloudwatchLogGroup, cloudWatchLogStream)
 
-	// Create metric emf metric batchers
-	// It will convert cloudwatch metrics to EMF
-	// and send them to cloudwatch logs
-	regionalBatchers, regionalChans := initMetricBatchers(InitMetricBatchersInput{
+	// Create per-region MetricsBatcher map
+	regionalBatchers := initMetricBatchers(InitMetricBatchersInput{
 		Ctx:           ctx,
 		ClientFactory: clientFactory,
 		Regions:       regions,
@@ -149,44 +193,61 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 	})
 	log.Info("initialized cloudwatch metric batchers")
 
-	// Build job manager
-	// This will start the go routine worker pool which will process jobs in parallel
+	// Build NAU store
+	key := nau.GenerateManifestKey(vpcNauManifestFilePrefix, vpcNauManifestFileName, time.Now())
+	s3Client, err := clientFactory.CreateS3(validatedHomeRegion.String())
+	if err != nil {
+		fatal(FatalInput{
+			Logger:  log,
+			ErrType: ErrCreateS3Client,
+			Cause:   err,
+		})
+	}
+	nauManifest := nau.NewManifest(ctx, s3BucketName, key, s3Client,
+		func(err error) { log.Error(err.Error()) }, log)
+	nauStore := nau.NewAccountNauStore(nauManifest)
+
+	// Build job manager, now using the batcher map
 	jobMgr := buildJobManager(BuildJobManagerInput{
 		Ctx:           ctx,
 		ClientFactory: clientFactory,
+		store:         nauStore,
 		Regions:       regions,
-		RegionalChans: regionalChans,
+		BatcherMap:    regionalBatchers,
 		Services:      svcCfg.Services,
 		Logger:        log,
+		S3BucketName:  s3BucketName,
+		HomeRegion:    validatedHomeRegion.String(),
 	})
 	log.Info("built job manager")
 
-	// Initialize handler
+	// Initialize handler with the new batcher map
 	handler := initResourceQuotaHandler(InitResourceQuotaHandlerInput{
-		ClientFactory:                    clientFactory,
-		LogGroup:                         cloudwatchLogGroup,
-		LogStream:                        cloudWatchLogStream,
-		Namespace:                        namespace,
-		RegionalCloudwatchMetricBatchers: regionalBatchers,
-		JobManager:                       jobMgr,
-		ServiceConfig:                    svcCfg,
-		Logger:                           log,
+		ClientFactory:    clientFactory,
+		LogGroup:         cloudwatchLogGroup,
+		LogStream:        cloudWatchLogStream,
+		Namespace:        namespace,
+		RegionalBatchers: regionalBatchers, // <— was RegionalCloudwatchMetricBatchers
+		JobManager:       jobMgr,
+		Store:            nauStore,
+		ServiceConfig:    svcCfg,
+		Logger:           log,
 	})
 	log.Info("initialized resource quota handler")
 
-	// Handle event
+	// Handle the event
 	if err := handler.HandleEvent(ctx, event); err != nil {
 		return LambdaResponse{"error", err.Error()}, err
 	}
 	return LambdaResponse{"success", "Processed event successfully"}, nil
 }
 
-// main is the entry point for the Lambda function.
+// main starts the Lambda function for resource quota monitoring
 func main() {
 	lambda.Start(HandleRequest)
 }
 
-// initLogger sets up the package logger based on environment configuration.
+// initLogger configures logging level from environment
 func initLogger() logger.Logger {
 	// Load log level from env var
 	logLevel := os.Getenv(logLevelEnv)
@@ -202,40 +263,27 @@ func initLogger() logger.Logger {
 	return logger.Get()
 }
 
-// initClientFactory initializes the client factory for AWS service clients.
-func initClientFactory(ctx context.Context, log logger.Logger) factory.ClientFactory {
-	clientFactory, err := factory.NewFactory(ctx, log)
-	if err != nil {
-		fatal(FatalInput{
-			Logger: log,
-			Msg:    ErrMsgCreateClientFactory,
-			Err:    err,
-		})
-	}
-	return clientFactory
-}
-
 // LoadServiceConfigInput contains parameters for loading service configuration.
 type LoadServiceConfigInput struct {
 	Logger logger.Logger
 }
 
-// loadServiceConfig reads and validates the service config file.
+// loadServiceConfig loads service configuration from Lambda layer
 func loadServiceConfig(input LoadServiceConfigInput) *serviceconfig.TopLevelServiceConfig {
 	path := os.Getenv(lambdaLayerPathEnv)
 	cfg, err := serviceconfig.LoadConfigFromFile(path, input.Logger)
 	if err != nil {
 		fatal(FatalInput{
-			Logger: input.Logger,
-			Msg:    ErrMsgLoadConfig,
-			Err:    err,
+			Logger:  input.Logger,
+			ErrType: ErrLoadConfig,
+			Cause:   err,
 		})
 	}
 	if err = serviceconfig.ValidateQuotaMetricConfig(*cfg, input.Logger); err != nil {
 		fatal(FatalInput{
-			Logger: input.Logger,
-			Msg:    ErrMsgInvalidConfig,
-			Err:    err,
+			Logger:  input.Logger,
+			ErrType: ErrInvalidConfig,
+			Cause:   err,
 		})
 	}
 	return cfg
@@ -247,11 +295,11 @@ type EnsureLogGroupInput struct {
 	Regions             []string
 	CloudwatchLogGroup  string
 	CloudwatchLogStream string
-	ClientFactory       factory.ClientFactory
+	ClientFactory       awsclientsFactory.ClientFactory
 	Logger              logger.Logger
 }
 
-// ensureLogGroup creates the CloudWatch Logs group and stream across regions.
+// ensureLogGroup creates CloudWatch log groups/streams across all regions
 func ensureLogGroup(input EnsureLogGroupInput) {
 	log := input.Logger
 	if err := cwlclient.EnsureGroupAndStreamAcrossRegions(input.Ctx, input.Regions,
@@ -259,9 +307,9 @@ func ensureLogGroup(input EnsureLogGroupInput) {
 		input.CloudwatchLogStream,
 		input.ClientFactory); err != nil {
 		fatal(FatalInput{
-			Logger: log,
-			Msg:    ErrMsgEnsureLogGroup,
-			Err:    err,
+			Logger:  log,
+			ErrType: ErrEnsureLogGroup,
+			Cause:   err,
 		})
 	}
 	log.Info("log group and stream ready in regions: %v", input.Regions)
@@ -270,70 +318,93 @@ func ensureLogGroup(input EnsureLogGroupInput) {
 // InitMetricBatchersInput contains parameters for initializing metric batchers.
 type InitMetricBatchersInput struct {
 	Ctx           context.Context
-	ClientFactory factory.ClientFactory
+	ClientFactory awsclientsFactory.ClientFactory
 	Regions       []string
+	Namespace     string
 	LogGroup      string
 	LogStream     string
-	Namespace     string
+	MaxCount      int
+	MaxBytes      int64
 	Logger        logger.Logger
 }
 
-// initMetricBatchers creates a metric batcher per region.
-func initMetricBatchers(input InitMetricBatchersInput) (*safemap.TypedMap[metricemfbatcher.CloudWatchMetricBatcher], *safemap.TypedMap[chan sharedtypes.CloudWatchMetric]) {
+// initMetricBatchers returns a map of region → metrics.Batcher.
+func initMetricBatchers(input InitMetricBatchersInput) *safemap.TypedMap[metrics.Batcher] {
 	log := input.Logger
-	cwlMap := &safemap.TypedMap[metricemfbatcher.CloudWatchMetricBatcher]{}
-	chanMap := &safemap.TypedMap[chan sharedtypes.CloudWatchMetric]{}
+	if log == nil {
+		log = logger.Get()
+	}
 
+	// 1) Build a TypedMap of CloudWatch Logs clients
+	cwlClients := safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
 	for _, region := range input.Regions {
 		client, err := input.ClientFactory.CreateCloudWatchLogs(region)
 		if err != nil {
 			fatal(FatalInput{
-				Logger: log,
-				Msg:    ErrMsgCreateCWLClientForMetrics,
-				Err:    err,
+				Logger:  log,
+				ErrType: ErrCreateCWLClientForMetrics,
+				Cause:   err,
 			})
 		}
-		mb, err := metricemfbatcher.NewCloudWatchMetricBatcher(input.Ctx, client,
-			input.Namespace, input.LogGroup, input.LogStream,
-			maxEvents, maxBytes, flushInterval, overhead, log)
-		if err != nil {
-			fatal(FatalInput{
-				Logger: log,
-				Msg:    ErrMsgInitMetricBatcher,
-				Err:    err,
-			})
-		}
-		cwlMap.Store(region, *mb)
-		chanMap.Store(region, mb.Batcher.GetInputChannel())
-		log.Info("metric batcher ready for region: %s", region)
+		cwlClients.Store(region, client)
 	}
-	return cwlMap, chanMap
+
+	// 2) Create a single EMF flusher backed by that client map
+	emfFlusher := emf.NewEMFFlusher(flusher.EMFFlusherConfig{
+		CwlClientMap:  &cwlClients,
+		LogGroupName:  input.LogGroup,
+		LogStreamName: input.LogStream,
+		Logger:        log,
+	})
+
+	// 3) Build one MetricsBatcher per region
+	batchers := safemap.TypedMap[metrics.Batcher]{}
+	for _, region := range input.Regions {
+		batcher := metrics.NewMetricsBatcher(metrics.MetricsBatcherConfig{
+			Namespace:  input.Namespace,
+			LogGroup:   input.LogGroup,
+			LogStream:  input.LogStream,
+			Region:     region,
+			MaxCount:   input.MaxCount,
+			MaxBytes:   input.MaxBytes,
+			EmfFlusher: emfFlusher,
+			Logger:     log,
+		})
+		batchers.Store(region, batcher)
+		log.Info("metrics batcher ready for region %s", region)
+	}
+
+	return &batchers
 }
 
 // BuildJobManagerInput contains parameters for building the job manager.
 type BuildJobManagerInput struct {
 	Ctx           context.Context
-	ClientFactory factory.ClientFactory
+	ClientFactory awsclientsFactory.ClientFactory
+	store         nau.AccountNauStore
 	Regions       []string
-	RegionalChans *safemap.TypedMap[chan sharedtypes.CloudWatchMetric]
+	BatcherMap    *safemap.TypedMap[metrics.Batcher]
 	Services      map[string]serviceconfig.ServiceConfig
+	S3BucketName  string
+	HomeRegion    string
 	Logger        logger.Logger
 }
 
-// buildJobManager wires up all jobs from service configs.
+// buildJobManager creates jobs for each service/region combination based on config
 func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 	log := input.Logger
 	clientFactory := input.ClientFactory
+
 	jm := job.NewJobManager(job.JobManagerConfig{
 		ParentCtx:  input.Ctx,
 		Workers:    defaultWorkerCount,
 		JobTimeout: defaultJobTimeout,
-		MetricMap:  input.RegionalChans,
+		BatcherMap: input.BatcherMap,
 		Log:        log,
 	})
 
 	var (
-		iamServiceQuotaRegion = "us-east-1"
+		iamServiceQuotaRegion = utils.AwsRegionUSEast1.String()
 	)
 	for _, region := range input.Regions {
 		for serviceName, svcCfg := range input.Services {
@@ -345,17 +416,17 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						ec2Client, err := clientFactory.CreateEC2(region)
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateEC2Client,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateEC2Client,
+								Cause:   err,
 							})
 						}
 						sqClient, err := clientFactory.CreateServiceQuotas(region)
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateServiceQuotaClient,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateServiceQuotaClient,
+								Cause:   err,
 							})
 						}
 						job, err := networkinterfaces.NewNetworkInterfaceJob(networkinterfaces.NetworkInterfaceJobConfig{
@@ -365,9 +436,9 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						})
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateNetworkInterfacesJob,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateNetworkInterfacesJob,
+								Cause:   err,
 							})
 						}
 						jm.AddJob(job)
@@ -382,17 +453,17 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						eksClient, err := clientFactory.CreateEKS(region)
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateEKSClient,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateEKSClient,
+								Cause:   err,
 							})
 						}
 						sqClient, err := clientFactory.CreateServiceQuotas(region)
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateServiceQuotaClient,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateServiceQuotaClient,
+								Cause:   err,
 							})
 						}
 						job, err := listcluster.NewListClusterJob(listcluster.ListClusterJobConfig{
@@ -402,9 +473,9 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						})
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateListEKSClustersJob,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateListEKSClustersJob,
+								Cause:   err,
 							})
 						}
 						jm.AddJob(job)
@@ -419,17 +490,17 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						iamClient, err := clientFactory.CreateIAM(region)
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateIAMClient,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateIAMClient,
+								Cause:   err,
 							})
 						}
 						sqClient, err := clientFactory.CreateServiceQuotas(iamServiceQuotaRegion)
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateServiceQuotaClient,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateServiceQuotaClient,
+								Cause:   err,
 							})
 						}
 						job, err := oidcproviders.NewOIDCProviderJob(oidcproviders.OIDCProviderJobConfig{
@@ -439,9 +510,9 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						})
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateIAMOIDCJob,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateIAMOIDCJob,
+								Cause:   err,
 							})
 						}
 						jm.AddJob(job)
@@ -452,9 +523,9 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						supportClient, err := clientFactory.CreateSupport(region)
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateSupportClient,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateSupportClient,
+								Cause:   err,
 							})
 						}
 						job, err := iamroles.NewIamRoleJob(iamroles.IamRoleJobConfig{
@@ -463,9 +534,9 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						})
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateIAMRolesJob,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateIAMRolesJob,
+								Cause:   err,
 							})
 						}
 						jm.AddJob(job)
@@ -480,9 +551,9 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						supportClient, err := clientFactory.CreateSupport(region)
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateSupportClient,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateSupportClient,
+								Cause:   err,
 							})
 						}
 						job, err := gp3storage.NewGp3StorageJob(gp3storage.Gp3StorageJobConfig{
@@ -491,9 +562,9 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						})
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateGP3StorageJob,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateGP3StorageJob,
+								Cause:   err,
 							})
 						}
 						jm.AddJob(job)
@@ -508,36 +579,20 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						ec2Client, err := clientFactory.CreateEC2(region)
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateEC2Client,
-								Err:    err,
-							})
-						}
-						efsClient, err := clientFactory.CreateEFS(region)
-						if err != nil {
-							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateEFSClient,
-								Err:    err,
-							})
-						}
-						elbClient, err := clientFactory.CreateELBV2(region)
-						if err != nil {
-							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateELBClient,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateEC2Client,
+								Cause:   err,
 							})
 						}
 						serviceQuotasClient, err := clientFactory.CreateServiceQuotas(region)
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateServiceQuotaClient,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateServiceQuotaClient,
+								Cause:   err,
 							})
 						}
-						nauCalc := nau.NewCalculator(ec2Client, efsClient, elbClient, log)
+						nauCalc := nau.NewNauCalculatorV2(input.Ctx, ec2Client, input.store, log)
 						job, err := vpcnau.NewVPCNAUJob(vpcnau.VPCNAUConfig{
 							NauCalculator:       nauCalc,
 							ServiceQuotasClient: serviceQuotasClient,
@@ -545,9 +600,9 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 						})
 						if err != nil {
 							fatal(FatalInput{
-								Logger: log,
-								Msg:    ErrMsgCreateVPCNAUJob,
-								Err:    err,
+								Logger:  log,
+								ErrType: ErrCreateVPCNAUJob,
+								Cause:   err,
 							})
 						}
 						jm.AddJob(job)
@@ -563,34 +618,36 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 
 // InitResourceQuotaHandlerInput contains parameters for initializing the resource quota handler.
 type InitResourceQuotaHandlerInput struct {
-	ClientFactory                    factory.ClientFactory
-	LogGroup                         string
-	LogStream                        string
-	Namespace                        string
-	RegionalCloudwatchMetricBatchers *safemap.TypedMap[metricemfbatcher.CloudWatchMetricBatcher]
-	JobManager                       *job.JobManager
-	ServiceConfig                    *serviceconfig.TopLevelServiceConfig
-	Logger                           logger.Logger
+	ClientFactory    awsclientsFactory.ClientFactory    // AWS client factory
+	LogGroup         string                             // CloudWatch log group name
+	LogStream        string                             // CloudWatch log stream name
+	Namespace        string                             // Metrics namespace
+	RegionalBatchers *safemap.TypedMap[metrics.Batcher] // Region-specific metric batchers
+	JobManager       *job.JobManager
+	Store            nau.AccountNauStore                  // Job execution coordinator
+	ServiceConfig    *serviceconfig.TopLevelServiceConfig // Service monitoring config
+	Logger           logger.Logger                        // Logger instance
 }
 
-// initResourceQuotaHandler builds the handler with dependencies.
+// initResourceQuotaHandler creates the main handler with all dependencies.
 func initResourceQuotaHandler(input InitResourceQuotaHandlerInput) *handlers.ResourceQuotaHandler {
 	log := input.Logger
 	h, err := handlers.NewResourceQuotaHandler(handlers.ResourceQuotaHandlerConfig{
-		ClientFactory:                    input.ClientFactory,
-		CloudwatchLogGroup:               input.LogGroup,
-		CloudWatchLogGroupStream:         input.LogStream,
-		Namespace:                        input.Namespace,
-		RegionalCloudwatchMetricBatchers: input.RegionalCloudwatchMetricBatchers,
-		JobManager:                       input.JobManager,
-		ServiceConfig:                    input.ServiceConfig,
-		Logger:                           log,
+		ClientFactory:       input.ClientFactory,
+		CloudwatchLogGroup:  input.LogGroup,
+		CloudWatchLogStream: input.LogStream,
+		Namespace:           input.Namespace,
+		RegionalBatchers:    input.RegionalBatchers,
+		JobManager:          input.JobManager,
+		Store:               input.Store,
+		ServiceConfig:       input.ServiceConfig,
+		Logger:              log,
 	})
 	if err != nil {
 		fatal(FatalInput{
-			Logger: log,
-			Msg:    ErrMsgCreateResourceQuotaHandler,
-			Err:    err,
+			Logger:  log,
+			ErrType: ErrCreateResourceQuotaHandler,
+			Cause:   err,
 		})
 	}
 	return h
@@ -598,14 +655,19 @@ func initResourceQuotaHandler(input InitResourceQuotaHandlerInput) *handlers.Res
 
 // FatalInput contains parameters for the fatal function which logs an error and exits.
 type FatalInput struct {
-	Logger logger.Logger
-	Msg    string
-	Err    error
+	Logger  logger.Logger
+	ErrType error // e.g. ErrCannotLoadEnvVar
+	Cause   error // the wrapped or underlying error, e.g. io.ErrNotExist
 }
 
-// fatal logs an error message and exits the program with status code 1.
+// fatal logs error and exits the process
 func fatal(input FatalInput) {
-	log := input.Logger
-	log.Error("%s: %v", input.Msg, input.Err)
+	if input.Cause != nil {
+		// prints "ErrCannotLoadEnvVar: open config.yaml: no such file or directory"
+		input.Logger.Error("%v: %v", input.ErrType, input.Cause)
+	} else {
+		// just prints the primary error if no cause
+		input.Logger.Error("%v", input.ErrType)
+	}
 	os.Exit(1)
 }

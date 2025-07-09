@@ -3,25 +3,22 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
-
-	"os/signal"
 	"time"
-
-	"slices"
 
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/factory"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf"
+	"github.com/outofoffice3/aws-samples/geras/internal/emf/batch/cloudtrail"
+	"github.com/outofoffice3/aws-samples/geras/internal/emf/flusher"
 	"github.com/outofoffice3/aws-samples/geras/internal/extension"
 	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
@@ -30,94 +27,47 @@ import (
 
 const (
 	// Environment variables
-	logLevelEnvVar        = "LOG_LEVEL"
-	regionsEnvVar         = "REGIONS"
-	cloudwatchGroupEnvVar = "CLOUDWATCH_LOG_GROUP"
-
-	// Error messages
-	ErrMsgCannotLoadEnvVar      = "cannot load environment variable"
-	ErrMsgLoadAWSConfigFailed   = "failed to load AWS config"
-	ErrMsgCloudWatchGroupNotSet = "cloudwatch log group not set"
-	ErrMsgGlobFailed            = "failed to glob stash files"
-	ErrMsgClientCreationFailed  = "failed to create CloudWatch Logs client"
-	ErrMsgFileOpenFailed        = "failed to open file"
-	ErrMsgMetaUnmarshalFailed   = "failed to unmarshal metadata"
+	logLevelEnvVar              = "LOG_LEVEL"
+	regionsEnvVar               = "REGIONS"
+	cloudwatchGroupEnvVar       = "CLOUDWATCH_LOG_GROUP"
+	metricNamespaceEnvVar       = "METRIC_NAMESPACE"
+	metricNameRequestsPerSecond = "RequestsPerSecond"
 )
 
 var (
-	// extensionName is the name of this extension, derived from the executable name
-	extensionName = filepath.Base(os.Args[0])
-
-	// extensionClient is the client used to communicate with the Lambda Extensions API
+	extensionName   = filepath.Base(os.Args[0])
 	extensionClient = extension.NewClient(os.Getenv("AWS_LAMBDA_RUNTIME_API"))
+	printPrefix     = fmt.Sprintf("[%s]", extensionName)
 
-	// printPrefix is used as a prefix for log messages
-	printPrefix = fmt.Sprintf("[%s]", extensionName)
+	// Error messages
+	ErrMsgCannotLoadEnvVar      error = errors.New("cannot load environment variable")
+	ErrMsgLoadAWSConfigFailed   error = errors.New("failed to load AWS config")
+	ErrMsgCloudWatchGroupNotSet error = errors.New("cloudwatch log group not set")
 )
 
-// main is the entry point for the EMF extension.
-// It initializes the extension, processes events, and flushes EMF records on shutdown.
 func main() {
-	// Initialize logger based on environment variable
-	logLevelValue := strings.ToLower(os.Getenv(logLevelEnvVar))
-	var logLevel logger.LogLevel
-	switch logLevelValue {
+	// 1) logger
+	lvl := strings.ToLower(os.Getenv(logLevelEnvVar))
+	var ll logger.LogLevel
+	switch lvl {
 	case "debug":
-		logLevel = logger.DEBUG
+		ll = logger.DEBUG
 	case "info":
-		logLevel = logger.INFO
+		ll = logger.INFO
 	case "warn":
-		logLevel = logger.WARN
+		ll = logger.WARN
 	case "error":
-		logLevel = logger.ERROR
+		ll = logger.ERROR
 	default:
-		logLevel = logger.INFO
+		ll = logger.INFO
 	}
-	logger.Init(logLevel, os.Stdout)
+	logger.Init(ll, os.Stdout)
 	log := logger.Get()
-	log.Debug("%s log level set to %s", printPrefix, logLevelValue)
+	log.Debug("%s log level %s", printPrefix, lvl)
 
-	// Create context with cancellation for graceful shutdown
+	// 2) ctx + shutdown signal
 	ctx, cancel := context.WithCancel(context.Background())
-
-	// Initialize client factory
-	clientFactory, err := factory.NewFactory(ctx, log)
-	if err != nil {
-		log.Error("%s %s: %v", printPrefix, ErrMsgLoadAWSConfigFailed, err)
-		os.Exit(1)
-	}
-	log.Debug("%s client factory initialized", printPrefix)
-
-	// Read regions from environment variable
-	rawRegions := os.Getenv(regionsEnvVar)
-	if rawRegions == "" {
-		handleInitError(log, errors.New(ErrMsgCannotLoadEnvVar))
-	}
-	regions := strings.Split(rawRegions, ",")
-	log.Info("%s regions: %s", printPrefix, regions)
-
-	// Read CloudWatch log group from environment variable
-	logGroup := os.Getenv(cloudwatchGroupEnvVar)
-	if logGroup == "" {
-		log.Error("%s %s", printPrefix, ErrMsgCloudWatchGroupNotSet)
-		os.Exit(1)
-	}
-
-	// Create log stream and ensure it exists in all regions
-	logStreamName := utils.MakeStreamName()
-	err = cwlclient.EnsureGroupAndStreamAcrossRegions(
-		ctx,
-		regions,
-		logGroup,
-		logStreamName,
-		clientFactory,
-	)
-	if err != nil {
-		handleInitError(log, err)
-	}
-	log.Info("%s log group and stream created across all regions: %s", printPrefix, regions)
-
-	// Set up signal handling for graceful shutdown
+	defer cancel()
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
@@ -125,125 +75,120 @@ func main() {
 		cancel()
 	}()
 
-	// ── 0) ONE-TIME INIT BEFORE REGISTER ─────────────────────────────────
-
-	// List all stash files
-	stashDir := os.TempDir()
-	files, err := filepath.Glob(filepath.Join(stashDir, "emf_*.ndjson"))
+	// 3) AWS factory
+	clientFactory, err := factory.NewFactory(ctx, log)
 	if err != nil {
-		log.Error("%s %s: %v", printPrefix, ErrMsgGlobFailed, err)
+		log.Error("%s %s: %v", printPrefix, ErrMsgLoadAWSConfigFailed, err)
 		os.Exit(1)
 	}
-	log.Debug("%s found %d files in %s", printPrefix, len(files), stashDir)
 
-	// Build per-region CloudWatch Logs client map
-	cwlMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
-	for _, f := range files {
-		region := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(f), "emf_"), ".ndjson")
-		client, err := clientFactory.CreateCloudWatchLogs(region)
-		if err != nil {
-			log.Error("%s %s for region %s: %v", printPrefix, ErrMsgClientCreationFailed, region, err)
-			continue
-		}
-		cwlMap.Store(region, client)
-		log.Debug("%s CloudWatch Logs client created for region: %s", printPrefix, region)
+	// 4) env
+	rawRegions := os.Getenv(regionsEnvVar)
+	if rawRegions == "" {
+		handleInitError(log, fmt.Errorf("%w, %s", ErrMsgCannotLoadEnvVar, regionsEnvVar))
+	}
+	regions := strings.Split(rawRegions, ",")
+
+	logGroup := os.Getenv(cloudwatchGroupEnvVar)
+	if logGroup == "" {
+		handleInitError(log, fmt.Errorf("%s %w, %s", printPrefix, ErrMsgCannotLoadEnvVar, cloudwatchGroupEnvVar))
 	}
 
-	// Create EMF flusher
-	log.Debug("%s cloudwatch log group set to: %s", printPrefix, logGroup)
-	flusher := emf.NewEMFFlusher(emf.EMFFlusherConfig{
+	namespace := os.Getenv(metricNamespaceEnvVar)
+	if namespace == "" {
+		handleInitError(log, fmt.Errorf("%s %w, %s", printPrefix, ErrMsgCannotLoadEnvVar, metricNamespaceEnvVar))
+	}
+
+	// 5) ensure CWL
+	stream := utils.MakeStreamName()
+	if err := cwlclient.EnsureGroupAndStreamAcrossRegions(
+		ctx, regions, logGroup, stream, clientFactory); err != nil {
+		handleInitError(log, err)
+	}
+
+	// 6) build CWL client map
+	cwlMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
+	for _, r := range regions {
+		c, err := clientFactory.CreateCloudWatchLogs(r)
+		if err != nil {
+			handleInitError(log, err)
+		}
+		cwlMap.Store(r, c)
+	}
+
+	// 7) flusher
+	ef := emf.NewEMFFlusher(flusher.EMFFlusherConfig{
 		CwlClientMap:  cwlMap,
-		LogStreamName: logStreamName,
 		LogGroupName:  logGroup,
+		LogStreamName: stream,
 		Logger:        log,
 	})
-	log.Debug("%s flusher created", printPrefix)
 
-	// ── 1) REGISTER ────────────────────────────────────────────────────────
+	// 8) one‐time: write initial last‐flush timestamp so we have a baseline
+	lastFlushFile := filepath.Join(os.TempDir(), "lastFlushTimestamp.txt")
+	now := time.Now().UTC()
+	if err := os.WriteFile(lastFlushFile, []byte(now.Format(time.RFC3339Nano)), 0644); err != nil {
+		log.Error("%s failed to write initial lastFlushTimestamp: %v", printPrefix, err)
+	}
+
+	// 9) build a CTFileBatcher and register
+	agg := cloudtrail.NewDefaultEMFAggregator()
+	batcher := cloudtrail.NewCTFileBatcher(cloudtrail.CTFileBatcherConfig{
+		BaseDir:          os.TempDir(),
+		Namespace:        namespace,
+		MetricName:       metricNameRequestsPerSecond,
+		MaxCount:         0, // not used on shutdown flush
+		MaxBytes:         0, // not used on shutdown flush
+		PropagateInvoker: false,
+		Aggregator:       agg,
+		EmfFlusher:       ef,
+		Logger:           log,
+	})
+
+	// 10) register with Lambda Extensions API
 	res, err := extensionClient.Register(ctx, extensionName)
 	if err != nil {
 		panic(err)
 	}
-	log.Info("%s Register response: %v", printPrefix, prettyPrint(res))
+	log.Info("%s Registered: %v", printPrefix, prettyPrint(res))
 
-	// ── 2) PROCESS EVENTS UNTIL SHUTDOWN ──────────────────────────────────
+	// 11) hang until shutdown
 	processEvents(ctx, log)
-	log.Info("%s processEvents() returned, SHUTDOWN", printPrefix)
+	log.Info("%s Got SHUTDOWN event, flushing all", printPrefix)
 
-	// ── 3) ON SHUTDOWN, FLUSH ALL STASH FILES ─────────────────────────────
-	files, _ = filepath.Glob(filepath.Join(os.TempDir(), "emf_*.ndjson"))
-	log.Info("%s flushing %d files", printPrefix, len(files))
-	var wg sync.WaitGroup
-	for _, path := range files {
-		wg.Add(1)
-		go func(path string) {
-			defer wg.Done()
-			f, err := os.Open(path)
-			if err != nil {
-				log.Error("%s %s: %v", printPrefix, ErrMsgFileOpenFailed, err)
-				return
-			}
-			defer f.Close()
-
-			var batch []emf.EMFRecord
-			scanner := bufio.NewScanner(f)
-			for scanner.Scan() {
-				var meta struct {
-					AWS struct{ Timestamp int64 } `json:"_aws"`
-				}
-				line := scanner.Bytes()
-				if err := json.Unmarshal(line, &meta); err != nil {
-					log.Error("%s %s for %s: %v", printPrefix, ErrMsgMetaUnmarshalFailed, path, err)
-					continue
-				}
-				batch = append(batch, emf.EMFRecord{
-					Payload:   slices.Clone(line),
-					TimeStamp: time.UnixMilli(meta.AWS.Timestamp),
-				})
-				log.Debug("%s read from %s: %s", printPrefix, path, string(line))
-			}
-			if len(batch) > 0 {
-				flusher.Flush(context.Background(), filepath.Base(path), batch)
-				log.Info("%s flushed %s", printPrefix, path)
-			}
-			os.Truncate(path, 0)
-		}(path)
+	// 12) on shutdown, do one last aggregated flush using real now()
+	if err := batcher.FlushAll(context.Background(), time.Now().UTC()); err != nil {
+		log.Error("%s shutdown flush error: %v", printPrefix, err)
 	}
-	wg.Wait()
 	log.Info("%s flush complete, exiting", printPrefix)
 }
 
-// processEvents continuously processes events from the Lambda Extensions API
-// until a shutdown event is received or the context is canceled.
+// processEvents unchanged…
+
 func processEvents(ctx context.Context, log logger.Logger) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			log.Debug("%s Waiting for event...", printPrefix)
 			res, err := extensionClient.NextEvent(ctx)
 			if err != nil {
-				log.Error("%s Error: %v", printPrefix, err)
+				log.Error("%s NextEvent error: %v", printPrefix, err)
 				return
 			}
-			log.Debug("%s Received event: %s", printPrefix, prettyPrint(res))
 			if res.EventType == extension.Shutdown {
-				log.Info("%s Received SHUTDOWN event", printPrefix)
 				return
 			}
 		}
 	}
 }
 
-// prettyPrint formats a value as indented JSON for logging purposes.
 func prettyPrint(v any) string {
 	data, _ := json.MarshalIndent(v, "", "\t")
 	return string(data)
 }
 
-// handleInitError logs an initialization error and exits the program.
-func handleInitError(logger logger.Logger, err error) {
-	logger.Error("%s error initializing service: %v", printPrefix, err)
+func handleInitError(log logger.Logger, err error) {
+	log.Error("%s init error: %v", printPrefix, err)
 	os.Exit(1)
 }

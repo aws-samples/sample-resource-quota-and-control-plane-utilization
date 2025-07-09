@@ -1,31 +1,63 @@
-# Executibles 
-*.exe 
+# Go executables & artifacts
+*.exe
 *.exe~
-*.dill
+*.dll
 *.so
 *.dylib
 *.zip
 
-# Coverage tool output
+# Go build output folders
+/bin/
+/build/
+/_build/
+/artifact/
+/eventgenerator/
+/package/
+
+# Local projects
+eventgenerator*
+
+# Test/coverage reports
 *.out
 *.html
 *.prof
 
-# Bin folders
-/bin/
-/build
-/_build
-/artifact
-eventgenerator/
-.aws-sam/
-*.toml
-package/
+# Go module caches
+**/vendor/
 
 # OS files
 *.DS_Store
+Thumbs.db
 
-# VS Code
-*.vscode/
+# Editor directories
+.vscode/
+.idea/
+*.sublime-*
+*.swp
 
-# Local Development
+# Local dev
 /internal/local_dev/
+
+# Terraform
+.terraform/
+/*.tfstate
+/*.tfstate.*
+*.tfvars
+override.tf
+override.tf.json
+*_override.tf.json
+crash.log
+terraform.plan
+.terraform.lock.hcl
+
+# AWS SAM / CloudFormation
+.aws-sam/
+/**/.aws-sam/
+*.template
+*.template.json
+samconfig.toml
+
+# CloudFormation change sets & packaging
+.cfn/
+.cloudformation/
+

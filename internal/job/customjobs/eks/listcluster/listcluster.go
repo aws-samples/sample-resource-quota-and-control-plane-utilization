@@ -2,17 +2,17 @@ package listcluster
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	cwTypes "github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/eksclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 // ListClusterJob will implment the Job interface
@@ -55,7 +55,7 @@ func NewListClusterJob(config ListClusterJobConfig) (job.Job, error) {
 
 }
 
-func (lj *ListClusterJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
+func (lj *ListClusterJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatchMetric, error) {
 
 	input := &eks.ListClustersInput{}
 	var totalCount int64 = 0
@@ -70,8 +70,6 @@ func (lj *ListClusterJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatch
 		totalCount += int64(len(output.Clusters))
 	}
 
-	lj.Logger.Debug("%s total : %d", lj.GetJobName(), totalCount)
-
 	// call service quota api to get quota limit for eks clusters
 	getServiceQuotaInput := &servicequotas.GetServiceQuotaInput{
 		QuotaCode:   aws.String(quotaCode),
@@ -82,18 +80,18 @@ func (lj *ListClusterJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatch
 	if err != nil {
 		return nil, err
 	}
-	quotaValue := getServiceQuotaOutput.Quota.Value
-	lj.Logger.Debug("%s quota value : %f", lj.GetJobName(), *quotaValue)
-	utilization := (float64(totalCount) / *quotaValue) * 100
-	lj.Logger.Debug("%s utilization : %f\n", lj.GetJobName(), utilization)
-	metric := sharedtypes.CloudWatchMetric{
+	quotaValue := aws.ToFloat64(getServiceQuotaOutput.Quota.Value)
+	utilization := (float64(totalCount) / quotaValue) * 100
+	percent := strconv.FormatFloat(utilization, 'f', 01, 64)
+	lj.Logger.Debug("%s total=%d , quota=%.2f, utilization=%q%%", lj.GetJobName(), totalCount, quotaValue, percent)
+	metric := sharedTypes.CloudWatchMetric{
 		Name:      cloudwatchMetricName,
 		Value:     utilization,
-		Unit:      cwTypes.StandardUnitPercent,
+		Unit:      sharedTypes.UnitPercent,
 		Metadata:  nil,
 		Timestamp: time.Now(),
 	}
-	return []sharedtypes.CloudWatchMetric{metric}, nil
+	return []sharedTypes.CloudWatchMetric{metric}, nil
 }
 
 // GetJobName return the name of the job

@@ -1,4 +1,5 @@
-// Package cwlclient provides a wrapper around AWS CloudWatch Logs SDK client
+// Package cwlclient provides a wrapper around the AWS CloudWatch Logs SDK client
+// with region validation, interface abstraction, and utility functions for log management.
 package cwlclient
 
 import (
@@ -12,7 +13,7 @@ import (
 )
 
 const (
-	// Error message constants
+	// Error message templates for CloudWatch Logs operations.
 	errInvalidRegion        = "cloudwatchlogsclient creation failed. invalid region"
 	errDescribeLogGroups    = "[%s] describe log groups: %w"
 	errCreateLogGroup       = "[%s] create log group %q: %w"
@@ -21,31 +22,30 @@ const (
 	errClientInit           = "[%s] client init: %w"
 )
 
-// CloudWatchLogsClient defines an interface for interacting with AWS CloudWatch Logs service
+// CloudWatchLogsClient defines an interface for AWS CloudWatch Logs operations
+// including log event publishing and log group/stream management.
 type CloudWatchLogsClient interface {
-	// GetRegion returns the AWS region this client is configured for
+	// GetRegion returns the AWS region this client is configured for.
 	GetRegion() string
-	// PutLogEvents sends log events to CloudWatch Logs in batches
+	// PutLogEvents sends log events to CloudWatch Logs in batches.
 	PutLogEvents(ctx context.Context, params *cloudwatchlogs.PutLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutLogEventsOutput, error)
-	// CreateLogGroup creates a new log group in CloudWatch Logs
+	// CreateLogGroup creates a new log group in CloudWatch Logs.
 	CreateLogGroup(ctx context.Context, params *cloudwatchlogs.CreateLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogGroupOutput, error)
-	// DescribeLogGroups retrieves information about log groups in CloudWatch Logs
+	// DescribeLogGroups retrieves information about existing log groups.
 	DescribeLogGroups(ctx context.Context, params *cloudwatchlogs.DescribeLogGroupsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogGroupsOutput, error)
-	// DescribeLogStreams retrieves information about log streams in a log group
+	// DescribeLogStreams retrieves information about log streams in a log group.
 	DescribeLogStreams(ctx context.Context, params *cloudwatchlogs.DescribeLogStreamsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DescribeLogStreamsOutput, error)
-	// CreateLogStream creates a new log stream in a log group
+	// CreateLogStream creates a new log stream in a log group.
 	CreateLogStream(ctx context.Context, params *cloudwatchlogs.CreateLogStreamInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogStreamOutput, error)
 }
 
-// CloudWatchLogsClientImpl implements the CloudWatchLogsClient interface
+// CloudWatchLogsClientImpl implements the CloudWatchLogsClient interface using the AWS SDK.
 type CloudWatchLogsClientImpl struct {
-	// region is the AWS region this client is configured for
-	region string
-	// client is the underlying AWS CloudWatch Logs SDK client
-	client *cloudwatchlogs.Client
+	region string                    // AWS region this client is configured for
+	client *cloudwatchlogs.Client    // Underlying AWS CloudWatch Logs SDK client
 }
 
-// NewCloudWatchLogsClient creates a new CloudWatchLogsClient
+// NewCloudWatchLogsClient creates a new CloudWatch Logs client wrapper with region validation.
 func NewCloudWatchLogsClient(client *cloudwatchlogs.Client, region string) (CloudWatchLogsClient, error) {
 	// validate region
 	if !utils.IsValidRegion(region) {
@@ -58,7 +58,7 @@ func NewCloudWatchLogsClient(client *cloudwatchlogs.Client, region string) (Clou
 	}, nil
 }
 
-// PutLogEvents puts logs events into cloudwatch in batches
+// PutLogEvents sends log events to CloudWatch Logs in batches.
 func (c *CloudWatchLogsClientImpl) PutLogEvents(ctx context.Context, params *cloudwatchlogs.PutLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutLogEventsOutput, error) {
 	return c.client.PutLogEvents(ctx, params, optFns...)
 }
@@ -88,8 +88,8 @@ func (c *CloudWatchLogsClientImpl) CreateLogStream(ctx context.Context, params *
 	return c.client.CreateLogStream(ctx, params, optFns...)
 }
 
-// EnsureLogGroupExists checks if a log group exists and creates it if not found
-// It pages through DescribeLogGroups via the SDK-provided paginator, and calls CreateLogGroup if no exact match is found
+// EnsureLogGroupExists checks if a log group exists and creates it if not found.
+// It uses pagination to search through existing log groups and handles race conditions.
 func EnsureLogGroupExists(ctx context.Context, client CloudWatchLogsClient, groupName string) error {
 	paginator := cloudwatchlogs.NewDescribeLogGroupsPaginator(client, &cloudwatchlogs.DescribeLogGroupsInput{
 		LogGroupNamePrefix: &groupName,
@@ -119,8 +119,8 @@ func EnsureLogGroupExists(ctx context.Context, client CloudWatchLogsClient, grou
 	return nil
 }
 
-// EnsureLogStreamExists checks if a log stream exists and creates it if not found
-// It pages through DescribeLogStreams via the SDK paginator, and calls CreateLogStream if no exact match is found
+// EnsureLogStreamExists checks if a log stream exists and creates it if not found.
+// It uses pagination to search through existing log streams and handles race conditions.
 func EnsureLogStreamExists(ctx context.Context, client CloudWatchLogsClient, groupName, streamName string) error {
 	paginator := cloudwatchlogs.NewDescribeLogStreamsPaginator(client, &cloudwatchlogs.DescribeLogStreamsInput{
 		LogGroupName:        &groupName,
@@ -152,8 +152,8 @@ func EnsureLogStreamExists(ctx context.Context, client CloudWatchLogsClient, gro
 	return nil
 }
 
-// EnsureGroupAndStreamAcrossRegions creates log groups and streams across multiple regions
-// For each region, it creates a client via factory.CreateCloudWatchLogs(), then calls EnsureLogGroupExists and EnsureLogStreamExists
+// EnsureGroupAndStreamAcrossRegions creates log groups and streams across multiple regions.
+// It uses the provided factory to create regional clients and ensures consistent log infrastructure.
 func EnsureGroupAndStreamAcrossRegions(
 	ctx context.Context,
 	regions []string,

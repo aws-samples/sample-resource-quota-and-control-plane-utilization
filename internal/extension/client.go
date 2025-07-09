@@ -1,3 +1,5 @@
+// Package extension provides a client for the AWS Lambda Extensions API,
+// enabling extensions to register, receive events, and report errors.
 package extension
 
 import (
@@ -9,56 +11,56 @@ import (
 	"net/http"
 )
 
-// RegisterResponse is the body of the response for /register
+// RegisterResponse contains the Lambda function details returned after extension registration.
 type RegisterResponse struct {
-	FunctionName    string `json:"functionName"`
-	FunctionVersion string `json:"functionVersion"`
-	Handler         string `json:"handler"`
+	FunctionName    string `json:"functionName"`    // Name of the Lambda function
+	FunctionVersion string `json:"functionVersion"` // Version of the Lambda function
+	Handler         string `json:"handler"`         // Function handler name
 }
 
-// NextEventResponse is the response for /event/next
+// NextEventResponse contains event details from the Lambda Extensions API.
 type NextEventResponse struct {
-	EventType          EventType `json:"eventType"`
-	DeadlineMs         int64     `json:"deadlineMs"`
-	RequestID          string    `json:"requestId"`
-	InvokedFunctionArn string    `json:"invokedFunctionArn"`
-	Tracing            Tracing   `json:"tracing"`
+	EventType          EventType `json:"eventType"`          // Type of event (INVOKE or SHUTDOWN)
+	DeadlineMs         int64     `json:"deadlineMs"`         // Event deadline in milliseconds
+	RequestID          string    `json:"requestId"`          // Unique request identifier
+	InvokedFunctionArn string    `json:"invokedFunctionArn"` // ARN of the invoked function
+	Tracing            Tracing   `json:"tracing"`            // Tracing information
 }
 
-// Tracing is part of the response for /event/next
+// Tracing contains AWS X-Ray tracing information for the Lambda invocation.
 type Tracing struct {
-	Type  string `json:"type"`
-	Value string `json:"value"`
+	Type  string `json:"type"`  // Tracing type (e.g., "X-Amzn-Trace-Id")
+	Value string `json:"value"` // Tracing header value
 }
 
-// StatusResponse is the body of the response for /init/error and /exit/error
+// StatusResponse contains the status returned from error reporting endpoints.
 type StatusResponse struct {
-	Status string `json:"status"`
+	Status string `json:"status"` // Status of the error report
 }
 
-// EventType represents the type of events recieved from /event/next
+// EventType represents the type of events received from the Lambda Extensions API.
 type EventType string
 
 const (
-	// Invoke is a lambda invoke
+	// Invoke represents a Lambda function invocation event.
 	Invoke EventType = "INVOKE"
-
-	// Shutdown is a shutdown event for the environment
+	// Shutdown represents a Lambda runtime shutdown event.
 	Shutdown EventType = "SHUTDOWN"
 
+	// HTTP header constants for Lambda Extensions API.
 	extensionNameHeader      = "Lambda-Extension-Name"
 	extensionIdentiferHeader = "Lambda-Extension-Identifier"
 	extensionErrorType       = "Lambda-Extension-Function-Error-Type"
 )
 
-// Client is a simple client for the Lambda Extensions API
+// Client provides methods to interact with the AWS Lambda Extensions API.
 type Client struct {
-	baseURL     string
-	httpClient  *http.Client
-	extensionID string
+	baseURL     string       // Base URL for the Extensions API
+	httpClient  *http.Client // HTTP client for API requests
+	extensionID string       // Extension identifier received during registration
 }
 
-// NewClient returns a Lambda Extensions API client
+// NewClient creates a new Lambda Extensions API client.
 func NewClient(awsLambdaRuntimeAPI string) *Client {
 	baseURL := fmt.Sprintf("http://%s/2020-01-01/extension", awsLambdaRuntimeAPI)
 	return &Client{
@@ -67,7 +69,8 @@ func NewClient(awsLambdaRuntimeAPI string) *Client {
 	}
 }
 
-// Register will register the extension with the Extensions API
+// Register registers the extension with the Lambda Extensions API.
+// Returns function details and stores the extension ID for subsequent API calls.
 func (e *Client) Register(ctx context.Context, filename string) (*RegisterResponse, error) {
 	const action = "/register"
 	url := e.baseURL + action
@@ -105,7 +108,8 @@ func (e *Client) Register(ctx context.Context, filename string) (*RegisterRespon
 	return &res, nil
 }
 
-// NextEvent blocks while long polling for the next lambda invoke or shutdown
+// NextEvent blocks while polling for the next Lambda event (invoke or shutdown).
+// This is a long-polling operation that waits for events from the Lambda runtime.
 func (e *Client) NextEvent(ctx context.Context) (*NextEventResponse, error) {
 	const action = "/event/next"
 	url := e.baseURL + action
@@ -135,7 +139,8 @@ func (e *Client) NextEvent(ctx context.Context) (*NextEventResponse, error) {
 	return &res, nil
 }
 
-// InitError reports an initialization error to the platform. Call it when you registered but failed to initialize
+// InitError reports an initialization error to the Lambda platform.
+// Use this when the extension registered successfully but failed during initialization.
 func (e *Client) InitError(ctx context.Context, errorType string) (*StatusResponse, error) {
 	const action = "/init/error"
 	url := e.baseURL + action
@@ -166,7 +171,8 @@ func (e *Client) InitError(ctx context.Context, errorType string) (*StatusRespon
 	return &res, nil
 }
 
-// ExitError reports an error to the platform before exiting. Call it when you encounter an unexpected failure
+// ExitError reports an unexpected error to the Lambda platform before exiting.
+// Use this when the extension encounters a fatal error during operation.
 func (e *Client) ExitError(ctx context.Context, errorType string) (*StatusResponse, error) {
 	const action = "/exit/error"
 	url := e.baseURL + action
