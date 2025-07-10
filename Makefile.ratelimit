@@ -1,0 +1,24 @@
+# Makefile.ratelimit
+
+# Function name
+FUNC        := ratelimit
+
+# top-level dist dir
+DIST_DIR    := dist/$(FUNC)
+
+# Go entry point
+SRC         := cmd/ratelimit/main.go
+
+.PHONY: all build package clean
+
+all: package
+
+build:
+	mkdir -p $(DIST_DIR)
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o $(DIST_DIR)/bootstrap $(SRC)
+
+package: build
+	cd $(DIST_DIR) && zip $(FUNC).zip bootstrap
+
+clean:
+	rm -rf dist/$(FUNC)

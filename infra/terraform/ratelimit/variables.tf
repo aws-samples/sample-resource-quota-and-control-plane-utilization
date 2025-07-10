@@ -21,7 +21,7 @@ variable "metric_namespace" {
   type        = string
   default     = "Rate Limit"
 }
-variable "propagate_iam_principal" {
+variable "propgate_invoker" {
   description = "Whether to emit per‐principal metrics (true/false)."
   type        = bool
   default     = false

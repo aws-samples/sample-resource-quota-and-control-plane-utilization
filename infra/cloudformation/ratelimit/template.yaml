@@ -18,7 +18,6 @@ Parameters:
     Type: String
     Description: S3 bucket where emf-extension.zip is published
     Default: custom-monitoring-poc
-
   AssumeRoleHandler:
     Type: String
     Default: bootstrap
@@ -253,7 +252,7 @@ Resources:
             FunctionResponseTypes:
               - ReportBatchItemFailures
 
-  AssumeRoleWebIdentityFunction:
+  AssumeRoleWithWebIdentityFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: go1.x
@@ -296,7 +295,6 @@ Resources:
         S3Bucket: !Ref ExtensionBucket     # parameter or hard-coded bucket
         S3Key:    emf/emf-extension.zip        # matches what `make upload` produces
 
-
   EventBridgeDeliveryRole:
     Type: AWS::IAM::Role
     Properties:
@@ -331,7 +329,7 @@ Resources:
       TreatMissingData: missing
       EvaluationPeriods: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
-      Threshold: 50
+      Threshold: 100
       Metrics:
         - Id: assumeRoleCount
           MetricStat:
@@ -357,7 +355,7 @@ Resources:
       TreatMissingData: missing
       EvaluationPeriods: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
-      Threshold: 50
+      Threshold: 100
       Metrics:
         - Id: assumeWebCount
           MetricStat:
@@ -375,20 +373,132 @@ Resources:
           Label: "AssumeRoleWithWebIdentity RPS"
           ReturnData: true
 
+  #############################
+  # 8) Metric Filter for Errors #
+  #############################
+  AssumeRoleErrorFilter:
+    Type: AWS::Logs::MetricFilter
+    DependsOn: AssumeRoleFunction
+    Properties:
+      FilterPattern: '"ERROR"'
+      LogGroupName: !Sub "/aws/lambda/${AssumeRoleFunction}"
+      MetricTransformations:
+        - MetricName: "Error Count"
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: "1"
+
+  AssumeRoleWithWebIdentityErrorFilter:
+    Type: AWS::Logs::MetricFilter
+    DependsOn: AssumeRoleWithWebIdentityFunction
+    Properties:
+      FilterPattern: '"ERROR"'
+      LogGroupName: !Sub "/aws/lambda/${AssumeRoleWithWebIdentityFunction}"
+      MetricTransformations:
+        - MetricName: "Error Count"
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: "1"
+
+  #########################################
+  # 9) Error‐Count Alarms (one per Lambda) #
+  #########################################
+
+  AssumeRoleErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "AssumeRole-Error-Alarm"
+      AlarmDescription: "Alarm when the AssumeRoleProcessor Lambda emits any ERROR log"
+      Namespace: !Ref MetricNamespace
+      MetricName: "Error Count"
+      Dimensions:
+        - Name: LogGroupName
+          Value: !Sub "/aws/lambda/${AssumeRoleFunction}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  AssumeRoleWithWebIdentityErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "AssumeRoleWithWebIdentity-Error-Alarm"
+      AlarmDescription: "Alarm when the WebIdentityProcessor Lambda emits any ERROR log"
+      Namespace: !Ref MetricNamespace
+      MetricName: "Error Count"
+      Dimensions:
+        - Name: LogGroupName
+          Value: !Sub "/aws/lambda/${AssumeRoleWithWebIdentityFunction}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
 Outputs:
+
+  # SQS Queues
   AssumeRoleQueueUrl:
-    Description: URL of the AssumeRole FIFO queue
+    Description: "URL of the AssumeRole FIFO queue"
     Value: !Ref AssumeRoleQueue
 
+  AssumeRoleQueueArn:
+    Description: "ARN of the AssumeRole FIFO queue"
+    Value: !GetAtt AssumeRoleQueue.Arn
+
   AssumeRoleWebIdentityQueueUrl:
-    Description: URL of the WebIdentity FIFO queue
+    Description: "URL of the WebIdentity FIFO queue"
     Value: !Ref AssumeRoleWebIdentityQueue
 
+  AssumeRoleWebIdentityQueueArn:
+    Description: "ARN of the WebIdentity FIFO queue"
+    Value: !GetAtt AssumeRoleWebIdentityQueue.Arn
+
+  # EventBridge Rules
+  KeepAliveToAssumeRoleRuleArn:
+    Description: "ARN of the scheduled flush rule for AssumeRole"
+    Value: !GetAtt KeepAliveToAssumeRoleRule.Arn
+
+  KeepAliveToWebIdentityRuleArn:
+    Description: "ARN of the scheduled flush rule for WebIdentity"
+    Value: !GetAtt KeepAliveToWebIdentityRule.Arn
+
+  AssumeRoleRuleArn:
+    Description: "ARN of the CloudTrail AssumeRole EventBridge rule"
+    Value: !GetAtt AssumeRoleRule.Arn
+
+  AssumeRoleWithWebIdentityRuleArn:
+    Description: "ARN of the CloudTrail WebIdentity EventBridge rule"
+    Value: !GetAtt AssumeRoleWithWebIdentityRule.Arn
+
+  # IAM Roles
+  LambdaExecutionRoleArn:
+    Description: "ARN of the Lambda execution role"
+    Value: !GetAtt LambdaExecutionRole.Arn
+
+  EventBridgeDeliveryRoleArn:
+    Description: "ARN of the EventBridge delivery role"
+    Value: !GetAtt EventBridgeDeliveryRole.Arn
+
+  # Lambda Layer
+  RateLimitExtensionLayerVersionArn:
+    Description: "ARN of the EMF extension Lambda layer"
+    Value: !Ref RateLimitExtensionLayer
+
+  # Lambda Functions
   AssumeRoleFunctionArn:
-    Description: ARN of the AssumeRole Lambda
+    Description: "ARN of the AssumeRoleProcessor Lambda"
     Value: !GetAtt AssumeRoleFunction.Arn
 
-  AssumeRoleWebIdentityFunctionArn:
-    Description: ARN of the AssumeRoleWithWebIdentity Lambda
-    Value: !GetAtt AssumeRoleWebIdentityFunction.Arn
+  AssumeRoleWithWebIdentityFunctionArn:
+    Description: "ARN of the WebIdentityProcessor Lambda"
+    Value: !GetAtt AssumeRoleWithWebIdentityFunction.Arn
+
+  AssumeRoleErrorAlarmName:
+      Description: "Name of the error count alarm for AssumeRoleProcessor"
+      Value: !Ref AssumeRoleErrorAlarm
+  AssumeRoleWithWebIdentityErrorAlarmName:
+    Description: "Name of the error count alarm for WebIdentityProcessor"
+    Value: !Ref AssumeRoleWithWebIdentityErrorAlarm
 

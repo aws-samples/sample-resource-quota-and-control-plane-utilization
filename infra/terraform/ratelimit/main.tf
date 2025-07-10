@@ -260,7 +260,7 @@ resource "aws_lambda_function" "assume_role" {
       LOG_LEVEL               = var.log_level
       CLOUDWATCH_LOG_GROUP    = var.cloudwatch_log_group
       METRIC_NAMESPACE        = var.metric_namespace
-      PROPAGATE_IAM_PRINCIPAL = var.propagate_iam_principal
+      PROPAGATE_INVOKER = var.propgate_invoker
     }
   }
 }
@@ -292,7 +292,7 @@ resource "aws_lambda_function" "assume_role_webidentity" {
       LOG_LEVEL               = var.log_level
       CLOUDWATCH_LOG_GROUP    = var.cloudwatch_log_group
       METRIC_NAMESPACE        = var.metric_namespace
-      PROPAGATE_IAM_PRINCIPAL = var.propagate_iam_principal
+      PROPAGATE_INVOKER = var.propgate_invoker
     }
   }
 }

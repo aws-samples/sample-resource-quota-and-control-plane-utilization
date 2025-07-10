@@ -2,351 +2,256 @@
 # Rate Limit Monitoring Solution
 
 1. [Overview](#overview)
-2. [Configuration](#configuration)
-3. [Deployment](#deployment)
-4. [Created Resources](#created-resources)
-5. [Testing / Code Coverage](#testing--code-coverage)
-
-![Architecture Diagram](../../media/rate-limit-solution.png)
+2. [Deployment Guide](#deployment-guide)
+    - [Environment Variables](#environment-variables)
+    - [Deploying w/ AWS SAM / Cloudformation](#deploying-with-aws-sam--cloudformation)
+    - [Deploying w/ Terraform](#deploying-with-terraform)
 
 ## Overview
 
-The Rate Limit Monitoring solution captures control-plane API calls via EventBridge, routes them through a single SQS FIFO queue (with per-event “messageGroupId”s), and processes them in batches of 10 with a Go Lambda. Each batch is emitted as Embedded Metric Format (EMF) logs into CloudWatch Logs to create custom metrics.
+The Rate Limit Monitoring solution:
+- captures control-plane API calls from CloudTrail via EventBridge
+- routes them through event specifc SQS FIFO queues 
+- lambda receives the event and generates an EMF for each event
+- event bridge will send a flush event every 60s that will tell lambda to publish all EMF's in the buffer
+- the lambda extension listens for SHUTDOWN lifecycle event and will flush any remaining EMF's in the buffer prior to lambda container being destroyed
+
+![Architecture Diagram](../../media/monitoring-solution-Page-8.drawio.png)
 
 ## ⚠️ DISCLAIMER ⚠️
 This solution will begin to track events that match the event pattern and populate cloudwatch metrics once deployed.  Please be sure to be aware of any associated costs with deploying and running within your account. 
 
-## Configuration
+## Deployment Guide
 
-This Lambda uses the following environment variables:
+This project can be deployed via [CloudFormation / AWS SAM](#deploying-with-cloudformation--aws-sam) or [Terraform](#deploying-with-terraform).  
 
+When deploying with AWS SAM:
+- build / package emf extension
+- send zip file containing artifact to s3
+- deploy sam template
 
-| Name             | Description                                                                   | Default |
-|------------------|-------------------------------------------------------------------------------|---------|
-| REGIONS          | Comma-separated list of AWS regions to run solution against (e.g.  us-east-1,us-west-2) |  us-east-1  |
-| LOG_LEVEL        | Log verbosity (DEBUG, INFO, WARN, ERROR)                                      | INFO |
-| LOG_GROUP_NAME   | CloudWatch Logs group name for EMF output                                     |  /lambda/ratelimit/emf  |
-| METRIC_NAMESPACE | CloudWatch Metric Namespace                                                   |  Rate Limit |
-| FLUSH_INTERVAL| Interval in seconds that lambda will flush emf records | 45
-
-## Deployment
+When deploying with Terraform:
+- build / package emf extension 
+- send zip file containing artifact to s3
+- build / package lambda function 
+- create / apply terraform plan
 
 ### Prerequisites
 
-- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)  
-- [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) (latest)  
-- [Go v1.22.1](https://go.dev/doc/install) or higher (for local development) 
-### Build & Deploy
+**Tools**
 
-The high level steps to fully deployment this solution are : 
+| Tool         | Version      | Install                                                                                          |
+|--------------|--------------|--------------------------------------------------------------------------------------------------|
+| Go           | ≥1.23.0      | https://golang.org/dl/                                                                           |
+| Terraform    | ≥1.0.0       | https://learn.hashicorp.com/tutorials/terraform/install-cli                                      |
+| AWS SAM CLI  | ≥1.142.1     | https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html |
+| AWS CLI      | Latest       | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html                    |
 
-- [Cloning the repo ](#clone-the-repository)
-- [Building Lambda Extension](#deploying-lambda-extension)
-- [Deploy Cloudformation template](#deploying-the-cloudformation-template)
 
-#### Clone the repository 
-```bash
-git clone https://github.com/aws-samples/sample-resource-quota-and-control-plane-utilization
-```
+### Environment Variables
 
-#### Deploying Lambda Extension 
+This Lambda uses the following environment variables:
 
-```bash 
-cmd/
-  emf-extension/      #This folder contains the entry point for the Lambda extension 
-              main.go 
-```
+| Name               | Description                                                                                     | Default                    | Valid Choices                   | Type             |
+|--------------------|-------------------------------------------------------------------------------------------------|----------------------------|---------------------------------|------------------|
+| REGIONS            | Comma-separated list of AWS regions to run solution against (e.g. `us-east-1,us-west-2`)        | `us-east-1`                | —                               | list(string)     |
+| LOG_LEVEL          | Log verbosity                                                                                   | `info`                     | `debug`, `info`, `warn`, `error`| string           |
+| LOG_GROUP_NAME     | CloudWatch Logs group name for EMF output                                                       | `/lambda/ratelimit/emf`    | —                               | string           |
+| METRIC_NAMESPACE   | CloudWatch Metric Namespace                                                                     | `Rate Limit`               | —                               | string           |
+| PROPAGATE_INVOKER  | Emit per-invoker metrics                                                                      | `false`                    | `true`, `false`                 | boolean          |
 
-We have a `Makefile` in the root directory that will handle: 
-- building the extension 
-- zipping it up properly based on lambda's requirements
 
-Afterward you will need to deploy the zip file to s3 and update the `template.yaml` to use the S3 bucket and object key.  Let walk through step by step 
+---
 
-``` Makefile 
-# Makefile
+### Deploying with AWS SAM / Cloudformation 
 
-# Name of your extension executable under /opt/extensions
-EXT_NAME   := emf
+Prior to deploying, please review the resource below to see what AWS SAM / Cloudformation will deploy.  
 
-# Where to drop the compiled assets
-BUILD_DIR  := build
-EXT_DIR    := $(BUILD_DIR)/extensions
-BIN_PATH   := $(EXT_DIR)/$(EXT_NAME)
+#### ⚠️ Warning ⚠️
+Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not verified to be production ready by default
 
-# Path to your extension’s main.go
-SRC        := cmd/emf-extension/main.go
+| Logical ID                             | Type                             | Description                                                       | Key Properties                                                                                                                                                                                  |
+|----------------------------------------|----------------------------------|-------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **AssumeRoleQueue**                    | AWS::SQS::Queue                  | FIFO queue to buffer AssumeRole events                            | QueueName: assume-role-queue.fifo<br>FifoQueue: true<br>ContentBasedDeduplication: true<br>VisibilityTimeout: 30                                                                                 |
+| **AssumeRoleWebIdentityQueue**         | AWS::SQS::Queue                  | FIFO queue to buffer AssumeRoleWithWebIdentity events             | QueueName: assume-role-web-identity-queue.fifo<br>FifoQueue: true<br>ContentBasedDeduplication: true<br>VisibilityTimeout: 30                                                                  |
+| **KeepAliveToAssumeRoleRule**          | AWS::Events::Rule                | 1-min scheduled “flush” ping to the AssumeRole SQS queue          | ScheduleExpression: rate(1 minute)<br>Targets: SQS → AssumeRoleQueue via EventBridgeDeliveryRole, InputTemplate: `{"flush":true}`<br>MessageGroupId: flush-group                               |
+| **KeepAliveToWebIdentityRule**         | AWS::Events::Rule                | 1-min scheduled “flush” ping to the WebIdentity SQS queue         | ScheduleExpression: rate(1 minute)<br>Targets: SQS → AssumeRoleWebIdentityQueue via EventBridgeDeliveryRole, InputTemplate: `{"flush":true}`<br>MessageGroupId: flush-group                       |
+| **AssumeRoleRule**                     | AWS::Events::Rule                | Routes CloudTrail AssumeRole API calls to the FIFO queue         | EventPattern: detail-type = "AWS API Call via CloudTrail", eventName = ["AssumeRole"], awsRegion = !Split[",", !Ref Regions]<br>Target: AssumeRoleQueue (MessageGroupId: assume-role-group)      |
+| **AssumeRoleWithWebIdentityRule**      | AWS::Events::Rule                | Routes CloudTrail AssumeRoleWithWebIdentity API calls to queue    | EventPattern: detail-type = "AWS API Call via CloudTrail", eventName = ["AssumeRoleWithWebIdentity"], awsRegion = !Split[",", !Ref Regions]<br>Target: WebIdentityQueue (MessageGroupId)       |
+| **AssumeRoleQueuePolicy**              | AWS::SQS::QueuePolicy            | Grants EventBridge permission to send to AssumeRoleQueue          | Queues: [!Ref AssumeRoleQueue]<br>Action: sqs:SendMessage, sqs:SendMessageBatch<br>Principal: events.amazonaws.com                                                                                |
+| **AssumeRoleWebIdentityQueuePolicy**   | AWS::SQS::QueuePolicy            | Grants EventBridge permission to send to WebIdentityQueue         | Queues: [!Ref AssumeRoleWebIdentityQueue]<br>Action: sqs:SendMessage, sqs:SendMessageBatch<br>Principal: events.amazonaws.com                                                                       |
+| **LambdaExecutionRole**                | AWS::IAM::Role                   | IAM role assumed by both Lambdas                                   | AssumeRolePolicy: lambda.amazonaws.com<br>ManagedPolicyArns: AWSLambdaBasicExecutionRole, AWSLambdaSQSQueueExecutionRole<br>Inline policy: logs:DescribeLogGroups/Streams                     |
+| **EventBridgeDeliveryRole**            | AWS::IAM::Role                   | IAM role allowing EventBridge to post to both SQS queues          | AssumeRolePolicy: events.amazonaws.com<br>Inline policy: sqs:SendMessage, sqs:SendMessageBatch on both queues                                                                                  |
+| **RateLimitExtensionLayer**            | AWS::Lambda::LayerVersion        | EMF extension to flush any remaining metrics on shutdown          | Content: S3Bucket = !Ref ExtensionBucket, S3Key = emf/emf-extension.zip<br>CompatibleRuntimes: provided.al2023<br>CompatibleArchitectures: arm64                                                |
+| **AssumeRoleFunction**                 | AWS::Serverless::Function        | Processes AssumeRoleQueue messages → emits EMF metrics             | CodeUri: ../../../cmd/ratelimit<br>Handler: !Ref AssumeRoleHandler<br>Runtime: provided.al2023<br>Layers: [RateLimitExtensionLayer]<br>Environment vars + SQS trigger, batchSize=10           |
+| **AssumeRoleWithWebIdentityFunction**  | AWS::Serverless::Function        | Processes WebIdentityQueue messages → emits EMF metrics            | CodeUri: ../../../cmd/ratelimit<br>Handler: !Ref AssumeWebIdentityHandler<br>Runtime: provided.al2023<br>Layers: [RateLimitExtensionLayer]<br>Environment vars + SQS trigger, batchSize=10    |
+| **AssumeRoleRPSAlarm**                 | AWS::CloudWatch::Alarm           | Alarm when AssumeRole RPS exceeds threshold                       | Metrics: CallCount Sum (Period=60)<br>Threshold: 100<br>Expression: CallCount/60<br>ComparisonOperator: ≥Threshold<br>EvaluationPeriods:1                                                       |
+| **AssumeRoleWithWebIdentityRPSAlarm**  | AWS::CloudWatch::Alarm           | Alarm when WebIdentity RPS exceeds threshold                      | Metrics: CallCount Sum (Period=60)<br>Threshold: 100<br>Expression: CallCount/60<br>ComparisonOperator: ≥Threshold<br>EvaluationPeriods:1                                                       |
+| **AssumeRoleErrorFilter**              | AWS::Logs::MetricFilter          | Captures any `ERROR` logs from AssumeRole Lambda                  | FilterPattern: `"ERROR"`<br>LogGroupName: /aws/lambda/${AssumeRoleFunction}<br>Transforms → MetricName: Error Count, Value: "1"                                                               |
+| **AssumeRoleWithWebIdentityErrorFilter** | AWS::Logs::MetricFilter        | Captures any `ERROR` logs from WebIdentity Lambda                 | FilterPattern: `"ERROR"`<br>LogGroupName: /aws/lambda/${AssumeRoleWithWebIdentityFunction}<br>Transforms → MetricName: Error Count, Value: "1"                                                |
+| **AssumeRoleErrorAlarm**               | AWS::CloudWatch::Alarm           | Alarm on any `ERROR` logs emitted by AssumeRole Lambda            | Namespace: !Ref MetricNamespace<br>MetricName: Error Count<br>Dimensions: LogGroupName = /aws/lambda/${AssumeRoleFunction}<br>Statistic: Sum, Threshold:1, Period:60, EvalPeriods:1         |
+| **AssumeRoleWithWebIdentityErrorAlarm**| AWS::CloudWatch::Alarm           | Alarm on any `ERROR` logs emitted by WebIdentity Lambda           | Namespace: !Ref MetricNamespace<br>MetricName: Error Count<br>Dimensions: LogGroupName = /aws/lambda/${AssumeRoleWithWebIdentityFunction}<br>Statistic: Sum, Threshold:1, Period:60, EvalPeriods:1 |
 
-.PHONY: all build package clean
+---
 
-all: package
+#### Parameters
 
-# 1) Build the Linux/ARM64 binary under build/extensions/emf
-build:
-	mkdir -p $(EXT_DIR)
-	GOOS=linux GOARCH=arm64 go build -o $(BIN_PATH) $(SRC)
-	chmod +x $(BIN_PATH)
+| Parameter             | Description                                           | Default                 | Type    |
+|-----------------------|-------------------------------------------------------|-------------------------|---------|
+| ExtensionBucket       | S3 bucket for EMF-extension ZIP                      | `custom-monitoring-poc` | String  |
+| Regions               | Comma-separated AWS regions                           | `us-east-1`             | String  |
+| LogLevel              | Lambda log verbosity (`debug`,`info`,`warn`,`error`)  | `info`                  | String  |
+| CloudWatchLogGroup    | CloudWatch log group for EMF                          | `/lambda/ratelimit/emf` | String  |
+| MetricNamespace       | CloudWatch metrics namespace                          | `Rate Limit`            | String  |
+| PropagateInvoker      | Emit per-invoker metrics? (`true`/`false`)            | `false`                 | Boolean |
 
-# 2) Zip up the extensions/ tree so it contains:
-#    extensions/
-#    └── emf   ← your executable
-package: build
-	cd $(BUILD_DIR) && zip -r ../emf-extension.zip extensions
+#### Steps
 
-clean:
-	rm -rf $(BUILD_DIR) *.zip
+1. **Clone the repo**  
+   ```bash
+   git clone https://github.com/aws-samples/sample-resource-quota-and-control-plane-utilization
+   cd sample-resource-quota-and-control-plane-utilization
+   ```
 
-```
+2. **Build the EMF extension**  
 
-This `Makefile` exposes 3 commands: 
-- make build 
-- make package 
-- make clean 
+We provide a file, [Makefile.extension](../../Makefile.extension), that simplifies the building, packaging and even pushing the artifact to S3 (optional)
 
-To prepare your lambda extension, first run `make clean` to make sure all older zip files are deleted from the root directory. 
+   ```bash
+   make -f Makefile.extension all # This will build and package the extension in dist/emf/emf-extension.zip
 
-When ready to package it for s3, run `make package`, this will automatically run the build step and then it will package the extension into a zip file that aligns to Lambda's requirements. 
+   # optional  
+   make -f Makefile.extension upload BUKCET=<your-bucket-name> #will build, package and send .zip artifact to s3
+   ```  
 
-Take the resulting .zip file and put into s3.  Make sure to keep track of the bucket name & object key, you will need it for the next step. 
+3. **Build & deploy with AWS SAM**  
+   ```bash
+   sam build
+   sam deploy --guided
+   ```
 
-#### Deploying the Cloudformation Template 
+---
 
-Navigate to the `infra/ratelimit` folder.  Ensure there is a template.yaml file located in that directory. 
-```bash 
-root-dir/
-        infra/
-            ratelimit/
-                    template.yaml
-```
+### Deploying with Terraform
 
-Open the `template.yaml` file and input your s3 bucket name and object where the lambda layer is being created. 
+Prior to deploying, please review the resource below to see what Terraform will deploy.  
 
-``` yaml 
-CloudTrailExtensionLayer: 
-    Type: AWS::Lambda::LayerVersion
-    Properties:
-      LayerName: CloudTrailExtensionLayer
-      CompatibleRuntimes:
-        - provided.al2023
-      Content:
-        S3Bucket: ${YOUR_S3_BUCKET_NAME}  # overwrite with your s3 bucket name
-        S3Key: ${YOUR_LAYER_OBJECT_KEY}   # overwrite with your object key 
-```
+#### ⚠️ Warning ⚠️
+Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not verified to be production ready by default
+ 
 
-3. From that directory, run the commands below to build and deploy the application. 
+| Resource                                      | Type                                 | Description                                                       | Key Properties                                                                                                                                             |
+|-----------------------------------------------|--------------------------------------|-------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **aws_sqs_queue.assume_role_queue**           | `aws_sqs_queue`                      | FIFO queue for AssumeRole events                                  | `name = "assume-role-queue.fifo"`<br>`fifo_queue = true`<br>`content_based_deduplication = true`<br>`visibility_timeout_seconds = 30`                         |
+| **aws_sqs_queue.assume_role_webidentity_queue** | `aws_sqs_queue`                    | FIFO queue for AssumeRoleWithWebIdentity                          | `name = "assume-role-web-identity-queue.fifo"`<br>`fifo_queue = true`<br>`content_based_deduplication = true`<br>`visibility_timeout_seconds = 30`         |
+| **aws_iam_role.lambda_exec**                  | `aws_iam_role`                       | Execution role for Lambdas                                        | `assume_role_policy` allowing `lambda.amazonaws.com`                                                                                                       |
+| **aws_iam_role_policy_attachment.lambda_basic** | `aws_iam_role_policy_attachment`    | Attach AWSLambdaBasicExecutionRole                                | –                                                                                                                                                          |
+| **aws_iam_role_policy_attachment.lambda_sqs** | `aws_iam_role_policy_attachment`    | Attach AWSLambdaSQSQueueExecutionRole                             | –                                                                                                                                                          |
+| **aws_iam_role_policy.describe_logs**         | `aws_iam_role_policy`                | Inline policy for CloudWatch Logs Describe/List                   | `Action = ["logs:DescribeLogGroups","logs:DescribeLogStreams"]`                                                                                            |
+| **aws_iam_role.eb_to_sqs**                    | `aws_iam_role`                       | Role for EventBridge → SQS delivery                               | `assume_role_policy` allowing `events.amazonaws.com`                                                                                                      |
+| **aws_iam_role_policy.eb_sqs_send**           | `aws_iam_role_policy`                | Inline policy for EventBridge to send to both SQS queues          | `Action = ["sqs:SendMessage","sqs:SendMessageBatch"]`<br>`Resource = [queue ARNs]`                                                                          |
+| **aws_cloudwatch_event_rule.keepalive_assume_role** | `aws_cloudwatch_event_rule`       | Scheduled 1-min flush → AssumeRoleQueue                           | `schedule_expression = "rate(1 minute)"`<br>`state = "ENABLED"`                                                                                             |
+| **aws_cloudwatch_event_rule.keepalive_webidentity** | `aws_cloudwatch_event_rule`      | Scheduled 1-min flush → WebIdentityQueue                          | `schedule_expression = "rate(1 minute)"`                                                                                                                   |
+| **aws_cloudwatch_event_rule.assume_role**     | `aws_cloudwatch_event_rule`          | CloudTrail pattern → AssumeRoleQueue                              | `event_pattern` matching `detail-type: AWS API Call via CloudTrail`, `eventName: ["AssumeRole"]`, `awsRegion: var.regions`                                 |
+| **aws_cloudwatch_event_rule.assume_role_webid** | `aws_cloudwatch_event_rule`        | CloudTrail pattern → WebIdentityQueue                             | `event_pattern` matching `detail-type: AWS API Call via CloudTrail`, `eventName: ["AssumeRoleWithWebIdentity"]`, `awsRegion: var.regions`                  |
+| **aws_cloudwatch_event_target.keepalive_assume_role** | `aws_cloudwatch_event_target`   | Binds keepalive rule → SQS queue                                  | `input_transformer` for `{"flush":true}`<br>`sqs_target { message_group_id = "flush-group" }`                                                               |
+| **aws_cloudwatch_event_target.keepalive_webidentity** | `aws_cloudwatch_event_target`  | Binds keepalive rule → WebIdentityQueue                           | –                                                                                                                                                          |
+| **aws_cloudwatch_event_target.assume_role**   | `aws_cloudwatch_event_target`        | Binds CT rule → AssumeRoleQueue                                   | `input_path = "$.detail"`<br>`sqs_target { message_group_id = "assume-role-group" }`                                                                        |
+| **aws_cloudwatch_event_target.assume_role_webid** | `aws_cloudwatch_event_target`      | Binds CT rule → WebIdentityQueue                                  | `input_path = "$.detail"`<br>`sqs_target { message_group_id = "assume-role-web-identity-group" }`                                                           |
+| **aws_sqs_queue_policy.assume_role_queue**    | `aws_sqs_queue_policy`               | Attach queue policy for assume-role-queue                         | `policy = aws_iam_role_policy.eb_sqs_send.policy`                                                                                                          |
+| **aws_sqs_queue_policy.assume_role_webid_queue** | `aws_sqs_queue_policy`             | Attach queue policy for web-identity queue                        | –                                                                                                                                                          |
+| **aws_lambda_function.assume_role**           | `aws_lambda_function`                | AssumeRoleProcessor lambda                                        | `filename = dist/ratelimit/ratelimit.zip`<br>`runtime = "provided.al2"`<br>`architectures = ["arm64"]`<br>`environment` variables                              |
+| **aws_lambda_event_source_mapping.assume_role_sqs** | `aws_lambda_event_source_mapping` | SQS → AssumeRole Lambda                                            | `batch_size = 10`<br>`function_response_types = ["ReportBatchItemFailures"]`                                                                               |
+| **aws_lambda_function.assume_role_webidentity** | `aws_lambda_function`              | AssumeRoleWithWebIdentityProcessor lambda                         | –                                                                                                                                                          |
+| **aws_lambda_event_source_mapping.assume_role_webidentity_sqs** | `aws_lambda_event_source_mapping` | SQS → WebIdentity Lambda                                            | –                                                                                                                                                          |
+| **aws_cloudwatch_metric_alarm.assume_role_rps** | `aws_cloudwatch_metric_alarm`      | Alarm on per-second rate for AssumeRole                          | `metric_query` uses direct rate metric, `threshold = 50`                                                                                                   |
+| **aws_cloudwatch_metric_alarm.assume_role_webidentity_rps** | `aws_cloudwatch_metric_alarm` | Alarm on per-second rate for WebIdentity                         | –                                                                                                                                                          |
 
-```bash
-sam build
-sam deploy --guided
-```
+---
 
->Tip: Use sam deploy --guided on your first deployment 
+### Deploying with Terraform
 
-#### What if my stack creation fails? 
-If your stack creation fails, due to the nature of cloudformation, you will have to delete the stack before you can deploy it under the same name. 
+#### Variables
 
-```bash
-# Deleting cloudformation stack 
-aws cloudformation delete-stack --stack-name ### YOUR STACK NAME HERE
+| Variable                 | Description                                                       | Default                     | Type          |
+|--------------------------|-------------------------------------------------------------------|-----------------------------|---------------|
+| regions                  | AWS regions to monitor (e.g., `["us-east-1"]`)                    | `["us-east-1"]`             | list(string)  |
+| log_level                | Lambda log verbosity                                              | `debug`                     | string        |
+| cloudwatch_log_group     | CloudWatch log group for EMF                                      | `/lambda/ratelimit/emf`     | string        |
+| metric_namespace         | CloudWatch metrics namespace                                      | `Rate Limit`                | string        |
+| propagate_iam_principal  | Emit per-invoker metrics?                                         | `false`                     | bool          |
+| extension_bucket         | S3 bucket for EMF-extension ZIP                                   | `custom-monitoring-poc`     | string        |
+| extension_s3_key         | S3 object key for EMF-extension ZIP                               | `emf/emf-extension.zip`     | string        |
 
-# Wait for cloudformation to finish delete (optional)
-aws cloudformation wait stack-delete-complete --stack-name ### YOUR STACK NAME HERE
-```
-Once cloudformation has successfully deleted the stack, you may deploy your changes using the sam build and sam deploy referenced earlier.  
+#### Steps
 
-## Created Resources 
+1. **Clone the repo**  
+   ```bash
+   git clone https://github.com/aws-samples/sample-resource-quota-and-control-plane-utilization
+   cd sample-resource-quota-and-control-plane-utilization
+   ```
 
-![Architecture Diagram](../../media/rate-limit-solution.png)
+2. **Build the EMF extension**  
 
-Out of the box the solution will deploy the following resources on your behalf: 
+We provide a file, [Makefile.extension](../../Makefile.extension), that simplifies the building, packaging and even pushing the artifact to S3 (optional)
 
-### Event Bridge
+  ```bash
+   make -f Makefile.extension all # This will build and package the extension in dist/emf/emf-extension.zip
 
-#### EventBridge Service Role 
+   # optional  
+   make -f Makefile.extension upload BUKCET=<your-bucket-name> # will build, package and send .zip artifact to s3
+   ```  
 
-```yaml 
-EventBridgeDeliveryRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: events.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: AllowSQSSend
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                  - sqs:SendMessageBatch
-                Resource: !GetAtt EventsQueue.Arn
-```
-- Purpose :
-  - Authorizes eventbridge to deliver events to the targets on the [SQS Queue](#sqs)
+3. **Build the RateLimit Lambda**
 
-#### AssumeRole Event Rule 
-```json 
-{
-  "detail-type": ["AWS API Call via CloudTrail"],
-  "detail": {
-    "eventName": ["AssumeRole"]
-  }
-}
-```
-- Target : [AssumeRole Processor Lambda function](#assumeroleprocessor) 
-- Input to target : `$.detail`
-- Batch size : `10`
-- IAM role : [EventBridge Service Role](#eventbridge-service-role)
+We provide a dedicated Makefile (`Makefile.ratelimit`) to compile & package the RateLimit function.  Terraform is configured use this directory to pull the artifact and deploy to AWS:
 
-#### AssumeRoleWithWebIdentityRules
-```json 
-{
-  "detail-type": ["AWS API Call via CloudTrail"],
-  "detail": {
-    "eventName": ["AssumeRoleWithWebIdentity"]
-  }
-}
-```
-- Target: [AssumeRoleWithWebIdentity Lambda function](#assumeroleprocessor) 
-- Input to target : `$.detail`
-- Batch size : 10 
-- IAM Role : [EventBridge Service Role](#eventbridge-service-role)
+> NOTE: If you wish to push the artifact to S3 or another location instead, please ensure you edit the infra/terraform/main.tf file accordinly to reflect these changes
 
-### SQS
-
-- Queue name : `event-queue.fifo`
-- Type : `FIFO`
-- Content based deuplication = `true`
-- Visibility timeout = `30 seconds` 
-- Encryption : `SSE-SQS`
-
-#### SQS Queue Policy
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowAssumeRole",
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "events.amazonaws.com"
-      },
-      "Action": [
-        "sqs:SendMessage",
-        "sqs:SendMessageBatch"
-      ],
-      "Resource": "arn:aws:sqs:${REGION}:${AWS_ACCOUNT_ID}:events-queue.fifo"
-    },
-    {
-      "Sid": "AllowAssumeRoleWeb",
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "events.amazonaws.com"
-      },
-      "Action": [
-        "sqs:SendMessage",
-        "sqs:SendMessageBatch"
-      ],
-      "Resource": "arn:aws:sqs:${REGION$}:${AWS_ACCOUNT_ID}:events-queue.fifo"
-    }
-  ]
-}
-```
-
-### Lambda
-
-#### Lambda Function(s)
-- Function Name : `AssumeRoleProcessor` 
-- Function Name : `AssumeRoleWithWebIdentityProcessor`
-- Memory : `128 MB`
-- Timeout : `30s`
-- IAM Role : [Lambda Execution Role](#lambda-iam-role-same-policy-for-both)
-- Purpose : 
-  - Ingests cloudtrail events from SQS in batches
-  - Converts to EMF
-  - Batches EMF's to /tmp by region until batch trigger is reached
-  - Batch conditions (per region) : 
-    - `10k records`
-    - `1 MB total size`
-    - `45s (default)`
-  - Sends batch of EMFs to cloudtrail logs when triggered
-
-##### Lambda IAM role (same policy for both)
-```yaml
-# The IAM role will use the following managed policies 
- - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
- - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
-
- # It will also create this inline policy 
- # Provides access to describe log groups / streams (required during init)
- PolicyName: DescribeLogResources
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:DescribeLogGroups
-                  - logs:DescribeLogStreams
-                Resource: "*"
-```
-
-#### Lambda Extension 
-- Purpose : 
-  - Subsribes to `INVOKE` and `SHUTDOWN` events from Lambda Runtime API
-  - On `SHUTDOWN`, it will drain any remaining EMF's that are in /tmp directory
-- Uses `[emf]` prefix in logs
-
-### Cloudwatch
-
-#### Cloudwatch Alarm(s)
-
-- Name : `AssumeRole-rps-alarm`
-- Threshold : `100`
-- Period : `1 min`
-- Comparison Operator : `GreaterThanOrEqualTo`
------
-- Name : `AssumeRoleWithWebIdentity-rps-alarm` 
-- Threshold : `100`
-- Period : `1 min`
-- Comparison Operator : `GreaterThanOrEqualTo`
-
-### Error Metrics
-#### Creating a Metric Filter (console)
-The solution uses a logger interface that will write `ERROR` logs to Cloudwatch Logs whenever there is a downstream I/O error and continue processing.  
-
-Natively in cloudwatch, you can create a "Metric Filter" on the `ERROR` keyword so that whenever cloudwatch gets errors logs, it will add to the error count metric.  This is what you should alarm on to signify there is some issue that needs attention from an administrator.  
-
-In order to do this, you first need naviate to the log group that your lambda writes its application logs to and click `Metric Filters` tab then click `create metric filter`.
-
-![Metric Filter](../../media/metric-filter.png)
-
-From there you want to use the `ERROR` filter pattern which will match any error logs the solution produces.  On the next screen you give your metric a name and a namespace and you you will have the ability to create an alarm on this metric to signal that there was some downstream error that occured during processing! 
-
-##### Recommendation
-
-Create your Error metric in a unique namespace specific for the application.  Error Metrics are 1 dimensional so without this, they will collide with other error metrics that may exists in the namespace.  
-
-## Testing / Code Coverage
-### Running Tests
-To run the test cases locally before you deploy, you first need to make sure you have Go v1.22.1 or higher installed on your local machine.  If you do not, please refer to the [Prerequisites](#prerequisites) and follow the instructions. 
 
 ```bash 
-# From the root directory of the project run the following command
-# This will produce a coverage report coverage.out file that we will 
-# render as html in the next step to view code coverage
-go test ./... -covermode=count -coverprofile=coverage.out
+# Compile and package the RateLimit lambda binary into dist/ratelimit/ratelimit.zip
+make -f Makefile.ratelimit all
+
+# Remove build artifacts for RateLimit only
+make -f Makefile.ratelimit clean
+
+
+dist/
+└── ratelimit/
+    ├── bootstrap         ← ARM64 Linux binary
+    └── ratelimit.zip     ← zip containing only the executable
 ```
 
-This will run the test cases for all packages that have *_test.go files.  If you see all "ok" messages on the output, then the tests have passed.  If not, you will see failure messages with the test name. 
+4. **Initialize and apply Terraform**  
+   ```bash
+   cd infra/terraform/ratelimit
+   terraform init
+   terraform validate #optional
+   terraform plan \
+     -var="extension_bucket=<your-bucket>" \
+     -var="extension_s3_key=emf/emf-extension.zip" \
+     -var="regions=[\"us-east-1\"]" \
+     -var="log_level=debug" \
+     -var="cloudwatch_log_group=/lambda/ratelimit/emf" \
+     -var="metric_namespace=\"Rate Limit\"" \
+     -var="propagate_iam_principal=false"
+   terraform apply -auto-approve \
+     -var="extension_bucket=<your-bucket>" \
+     -var="extension_s3_key=emf/emf-extension.zip"
+   ```
 
-```bash 
-# next run the following command to generate an html file from the coverage report
-go tool cover -html=coverage.out -o coverage.html
-```
-This will produce a file named `coverage.html` in your root directory.  If you open this file in your browser you will see a code coverage report showing you for each file how much testing coverage it has.  
+---
 
+## Tip: Automating Builds & Deployment
+
+You can integrate these `make` and deployment steps into a CI/CD pipeline (GitHub Actions, GitLab CI, Jenkins, etc.) or run them inside a dedicated build container as a **pre-deployment hook**. This ensures:
+
+- **Reproducible artifacts** in a clean environment  
+- **Early failure detection** in pull requests  
+- **Consistent deployments** across all agents  
+- **Decoupling** developers from local workstation dependencies  
+
+Simply invoke your `make` targets and SAM/Terraform commands in your pipeline’s build stage prior to the deploy stage.
+
+---
