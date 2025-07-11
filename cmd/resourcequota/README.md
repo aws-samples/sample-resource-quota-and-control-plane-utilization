@@ -7,7 +7,6 @@
     - [Deploying w/ Terraform](#deploying-with-terraform)
 3. [Tips: Automating Deployment](#tip-automating-builds--deployment)
 
-![Architecture Diagram](../../media/monitoring-solution-Page-6.drawio%20(1).png)
 
 ## Overview 
 
@@ -15,6 +14,8 @@ The Resource Quota Solution does the following :
 - captures total counts of various resources specific via your config file
 - gets the total allocation from Service Quotas api 
 - produces utilization % and sends metric to cloudwatch logs via EMF (Embedded Metric Format)
+
+![Architecture Diagram](../../media/monitoring-solution-Page-6.drawio%20(1).png)
 
 ## Valid Metrics per service 
 
