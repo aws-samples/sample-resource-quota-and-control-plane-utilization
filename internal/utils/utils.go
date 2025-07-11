@@ -5,6 +5,7 @@ package utils
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -100,6 +101,18 @@ func MakeStreamName() string {
 	host, _ := os.Hostname()
 	ts := time.Now().UTC().Format(LogStreamTimeLayout)
 	return fmt.Sprintf("%s-%s", ts, host)
+}
+
+var (
+	// logInjectionPattern matches characters that could be used for log injection
+	logInjectionPattern = regexp.MustCompile(`[\r\n\t\x00-\x1f\x7f-\x9f]`)
+)
+
+// SanitizeLogString sanitizes input strings to prevent log injection attacks.
+// It removes or replaces control characters, newlines, and other potentially
+// dangerous characters that could be used to manipulate log output.
+func SanitizeLogString(input string) string {
+	return logInjectionPattern.ReplaceAllString(input, "_")
 }
 
 // ExtractRoleNameFromArn parses an AWS ARN and extracts the role name.

@@ -6,7 +6,7 @@ This repository contains two complementary, serverless Go projects following AWS
 
 ---
 #### ⚠️ Disclaimer ⚠️
-This repository is provided as a functional example. It is not intended to represent a production-ready "drop in" solution. Before using in any live environment, you should:
+This repository is provided as a functional example. It is not intended to represent a production-ready "drop-in" solution. Before using in any live environment, you should:
 
 - Review and adjust IAM permissions to follow the principle of least privilege
 - Review encryption at rest and in transit for all resources (SQS, Lambda, logs, etc.)
@@ -19,46 +19,49 @@ Use this sample as a starting point, not a drop-in solution. Customize this solu
 ---
 
 ### Rate Limit Monitor
-An **event-driven** pipeline that captures control-plane API call rates and publishes RequestPerSecond metric to Cloudwatch in ~60s intervals
+An **event-driven** pipeline that captures control-plane API call rates and publishes RequestPerSecond metrics to CloudWatch in ~60-second intervals.
 
-Below is an example of an api level RequestPerSecond metric.  This metric is valuable to alarm on since it represent the total usage of an api. 
+**Use Case:** Helps customers prevent throttling which can reduce production customer-facing impacting events. Invoker-level metrics allow customers to identify the source of consumption, enabling them to better redistribute resources and maintain room for growth from an RPS perspective.
+
+Below is an example of an API-level RequestPerSecond metric. This metric is valuable to alarm on since it represents the total usage of an API.
 
 ![api level rps metric](/media/apimetric.png)
 
-Below is an example of invoker level RequestPerSecond metric.  Each invoker will have their own dedicated metric for a given api. 
+Below is an example of invoker-level RequestPerSecond metric. Each invoker will have their own dedicated metric for a given API.
 
-This metric is useful for a deeper analysis into where your consumption is coming from. 
+This metric is useful for deeper analysis into where your consumption is coming from. 
 
 ![invoker level rps metric](/media/invokermetric.png)
   
 
 ### Resource Quota Utilization
-  A scheduled lambda function that computes resource utilization across your account by making various describe calls, retrieving the current quota from Service Quotas and publishing a utilization metric (%) in Cloudwatch. 
+A scheduled Lambda function that computes resource utilization across your account by making various describe calls, retrieving the current quota from Service Quotas and publishing utilization metrics (%) to CloudWatch.
 
-    This project is aimed to capture utilization metrics for resources that do not have coverage natively. 
+**Use Case:** Valuable for dynamically generating utilization metrics which help prevent resource exhaustion. This is mainly a key concern for larger customers or ISVs who need proactive monitoring to avoid hitting service limits.
 
-    As of now we have support for the following metrics, with plans to continuously add more based on customer feedback: 
-  
-    - total networker interface per region
-    - VPC Nau (Network Address Units)
-    - total g3Storage 
-    - total oidc providers
-    - total EKS Clusters
-    - total iam roles
+This project captures utilization metrics for resources that do not have native CloudWatch coverage.
+
+Currently supported metrics (with plans to continuously add more based on customer feedback):
+- Total network interfaces per region
+- VPC NAU (Network Address Units)
+- Total GP3 storage
+- Total OIDC providers
+- Total EKS clusters
+- Total IAM roles
 
 ---
 ## Repo Folder Structure
 
 ```bash
-cmd / # entry point location for each project
-    emf-extension/      # lambda extension   
+cmd/ # entry point location for each project
+    emf-extension/      # Lambda extension   
             main.go 
     ratelimit/          # rate limit solution
             main.go 
     resourcequota/      # resource quota solution
             main.go 
-infra /                 # folder for deploying via cloudformation and terraform 
-        /cloudormation 
+infra/                  # folder for deploying via CloudFormation and Terraform 
+        /cloudformation 
                 /ratelimit
                         template.yaml
                 /resourcequota
@@ -70,8 +73,8 @@ infra /                 # folder for deploying via cloudformation and terraform
                 /resourcequota
                         main.tf
                         variables.tf
-internal/   # folder for internal libraries useds
-lambda-layer/ # directory for lambda layer
+internal/   # folder for internal libraries used
+lambda-layer/ # directory for Lambda layer
 ```
 
 ## Architecture Diagrams
@@ -90,7 +93,7 @@ lambda-layer/ # directory for lambda layer
 
 
 ## Subproject READMEs
-Please navigate to each projects README file for more details.
+Please navigate to each project's README file for more details.
 
 - [Rate Limit Solution → `cmd/ratelimit/README.md`](cmd/ratelimit/README.md) 
   

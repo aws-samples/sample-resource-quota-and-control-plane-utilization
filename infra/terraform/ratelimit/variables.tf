@@ -1,3 +1,5 @@
+# Rate Limit Monitor - Terraform variables
+
 variable "regions" {
   description = "List of AWS regions to deploy against (e.g. [\"us-east-1\",\"us-west-2\"])."
   type        = list(string)

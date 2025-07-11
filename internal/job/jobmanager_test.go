@@ -96,7 +96,7 @@ func TestJobManagerScenarios(t *testing.T) {
 
 			// enqueue jobs
 			for _, job := range tt.jobs {
-				jm.AddJob(job)
+				_ = jm.AddJob(job) // Ignore error for test
 			}
 			// invoking LogError for coverage
 			jm.LogError(errors.New("test error"))

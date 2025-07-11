@@ -11,11 +11,11 @@
 ## Overview
 
 The Rate Limit Monitoring solution:
-- captures control-plane API calls from CloudTrail via EventBridge
-- routes them through event specifc SQS FIFO queues 
-- lambda receives the event and generates an EMF for each event
-- event bridge will send a flush event every 60s that will tell lambda to publish all EMF's in the buffer
-- the lambda extension listens for SHUTDOWN lifecycle event and will flush any remaining EMF's in the buffer prior to lambda container being destroyed
+- Captures control-plane API calls from CloudTrail via EventBridge
+- Routes them through event-specific SQS FIFO queues
+- Lambda receives the event and generates an EMF for each event
+- EventBridge sends a flush event every 60 seconds that tells Lambda to publish all EMFs in the buffer
+- The Lambda extension listens for SHUTDOWN lifecycle events and flushes any remaining EMFs in the buffer prior to Lambda container destruction
 
 ![Architecture Diagram](../../media/monitoring-solution-Page-8.drawio.png)
 
@@ -81,7 +81,7 @@ This Lambda uses the following environment variables:
 Prior to deploying, please review the resource below to see what AWS SAM / Cloudformation will deploy.  
 
 #### ⚠️ Warning ⚠️
-Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not intended to be production ready by default
+Please make changes to the template based on your specific environment and security requirements. This is a functional sample but is not intended to be production-ready by default.
 
 #### Resources
 
@@ -136,7 +136,7 @@ We provide a file, [Makefile.extension](../../Makefile.extension), that simplifi
    make -f Makefile.extension all # This will build and package the extension in dist/emf/emf-extension.zip
 
    # optional  
-   make -f Makefile.extension upload BUKCET=<your-bucket-name> #will build, package and send .zip artifact to s3
+   make -f Makefile.extension upload BUCKET=<your-bucket-name> # will build, package and send .zip artifact to S3
    ```  
 
 3. **Build & deploy with AWS SAM / Cloudformation**  
@@ -152,7 +152,7 @@ We provide a file, [Makefile.extension](../../Makefile.extension), that simplifi
 Prior to deploying, please review the resource below to see what Terraform will deploy.  
 
 #### ⚠️ Warning ⚠️
-Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not verified to be production ready by default
+Please make changes to the template based on your specific environment and security requirements. This is a functional sample but is not verified to be production-ready by default.
  
 #### Resources 
 | Resource                                      | Type                                 | Description                                                       | Key Properties                                                                                                                                             |
@@ -192,7 +192,7 @@ Please make changes to the template based on your specific environment / securit
 | log_level                | Lambda log verbosity                                              | `debug`                     | string        |
 | cloudwatch_log_group     | CloudWatch log group for EMF                                      | `/lambda/ratelimit/emf`     | string        |
 | metric_namespace         | CloudWatch metrics namespace                                      | `Rate Limit`                | string        |
-| propagate_iam_principal  | Emit per-invoker metrics?                                         | `false`                     | bool          |
+| propagate_invoker        | Emit per-invoker metrics?                                         | `false`                     | bool          |
 | extension_bucket         | S3 bucket for EMF-extension ZIP                                   | `custom-monitoring-poc`     | string        |
 | extension_s3_key         | S3 object key for EMF-extension ZIP                               | `emf/emf-extension.zip`     | string        |
 
@@ -212,7 +212,7 @@ We provide a file, [Makefile.extension](../../Makefile.extension), that simplifi
    make -f Makefile.extension all # This will build and package the extension in dist/emf/emf-extension.zip
 
    # optional  
-   make -f Makefile.extension upload BUKCET=<your-bucket-name> # will build, package and send .zip artifact to s3
+   make -f Makefile.extension upload BUCKET=<your-bucket-name> # will build, package and send .zip artifact to S3
    ```  
 
 3. **Build the RateLimit Lambda Function**

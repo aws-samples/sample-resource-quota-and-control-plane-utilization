@@ -40,7 +40,12 @@ func (s *syncStore[V]) Load(key string) (V, bool) {
 		var zero V
 		return zero, false
 	}
-	return raw.(V), true
+	val, ok := raw.(V)
+	if !ok {
+		var zero V
+		return zero, false
+	}
+	return val, true
 }
 
 // LoadOrStore returns the existing value for the key if present.
@@ -48,7 +53,12 @@ func (s *syncStore[V]) Load(key string) (V, bool) {
 // This operation is atomic.
 func (s *syncStore[V]) LoadOrStore(key string, newVal V) (V, bool) {
 	raw, loaded := s.m.LoadOrStore(key, newVal)
-	return raw.(V), loaded
+	val, ok := raw.(V)
+	if !ok {
+		var zero V
+		return zero, false
+	}
+	return val, loaded
 }
 
 // Store unconditionally sets the value for the given key.
@@ -68,6 +78,11 @@ func (s *syncStore[V]) Delete(key string) {
 // The iteration order is not guaranteed to be consistent.
 func (s *syncStore[V]) Range(fn func(key string, val V) bool) {
 	s.m.Range(func(rawKey, rawVal any) bool {
-		return fn(rawKey.(string), rawVal.(V))
+		key, keyOk := rawKey.(string)
+		val, valOk := rawVal.(V)
+		if !keyOk || !valOk {
+			return true // skip invalid entries
+		}
+		return fn(key, val)
 	})
 }

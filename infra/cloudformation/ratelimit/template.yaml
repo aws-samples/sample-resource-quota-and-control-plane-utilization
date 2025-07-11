@@ -1,5 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
+# Rate Limit Monitor - Event-driven pipeline for CloudTrail API call monitoring
 Description: |
   EventBridge → SQS FIFO → 2 Go Lambdas
   • Two FIFO queues, two EB rules → dedicated message flows
@@ -318,9 +319,15 @@ Resources:
                   - !GetAtt AssumeRoleQueue.Arn
                   - !GetAtt AssumeRoleWebIdentityQueue.Arn
 
-  #############################
-  # 8) RPS Alarms (unchanged) #
-  #############################
+  ##################
+  # 8) RPS Alarms  #
+  ##################
+  
+  # SNS Topic for alarm notifications
+  AlarmNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: "RateLimitAlarms"
   AssumeRoleRPSAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -356,6 +363,10 @@ Resources:
       EvaluationPeriods: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       Threshold: 100
+      AlarmActions:
+        - !Ref AlarmNotificationTopic
+      OKActions:
+        - !Ref AlarmNotificationTopic
       Metrics:
         - Id: assumeWebCount
           MetricStat:

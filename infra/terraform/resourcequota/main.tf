@@ -1,3 +1,4 @@
+# Resource Quota Monitor - Terraform configuration for scheduled resource utilization monitoring
 terraform {
   required_providers {
     aws = {
@@ -17,7 +18,8 @@ provider "aws" {}
 
 
 ###############################
-# 2) IAM Role & Policy        #
+# 1) IAM Role & Policy        #
+# Lambda execution permissions#
 ###############################
 data "aws_iam_policy" "basic_exec" {
   arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
@@ -89,7 +91,8 @@ resource "aws_iam_role_policy" "resource_quota" {
 }
 
 ################################################
-# 3) Lambda Layer (config file)                #
+# 2) Lambda Layer (config file)                #
+# Service configuration for quota monitoring    #
 ################################################
 
 data "archive_file" "lambda_config_layer" {
@@ -106,7 +109,8 @@ resource "aws_lambda_layer_version" "config" {
 }
 
 ################################################
-# 4) Go Lambda + Schedule                     #
+# 3) Go Lambda + Schedule                     #
+# Scheduled resource quota monitoring function #
 ################################################
 locals {
   # path.module == root/infra/terraform/ratelimit
@@ -160,7 +164,8 @@ resource "aws_lambda_permission" "allow_event" {
 }
 
 #############################
-# Error Metric & Alarm      #
+# 4) Error Metric & Alarm   #
+# Monitor Lambda errors     #
 #############################
 
 # 1) Metric filter on the Lambda’s native log group 

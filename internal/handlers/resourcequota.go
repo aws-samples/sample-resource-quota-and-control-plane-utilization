@@ -16,16 +16,16 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/serviceconfig"
 )
 
-const (
-	// Error message constants for resource quota handler validation.
-	ClientFactoryNilErrMsg          = "client factory is nil"
-	CloudwatchLogGroupNotSetErrMsg  = "cloudwatch log group is not set"
-	CloudWatchLogStreamNotSetErrMsg = "cloudwatch log stream is not set"
-	MetricNamespaceNotSetErrMsg     = "metric namespace is not set"
-	RegionalBatchersNilErrMsg       = "regional metric batchers is nil"
-	JobManagerNilErrMsg             = "job manager is nil"
-	ServiceConfigNilErrMsg          = "service config is nil"
-	StoreNilErrMsg                  = "nau store is nil"
+var (
+	// Error variables for resource quota handler validation.
+	ErrClientFactoryNil          = errors.New("client factory is nil")
+	ErrCloudwatchLogGroupNotSet  = errors.New("cloudwatch log group is not set")
+	ErrCloudWatchLogStreamNotSet = errors.New("cloudwatch log stream is not set")
+	ErrMetricNamespaceNotSet     = errors.New("metric namespace is not set")
+	ErrRegionalBatchersNil       = errors.New("regional metric batchers is nil")
+	ErrJobManagerNil             = errors.New("job manager is nil")
+	ErrServiceConfigNil          = errors.New("service config is nil")
+	ErrStoreNil                  = errors.New("nau store is nil")
 )
 
 // ResourceQuotaHandler processes scheduled CloudWatch events to trigger
@@ -61,28 +61,28 @@ func NewResourceQuotaHandler(config ResourceQuotaHandlerConfig) (*ResourceQuotaH
 		config.Logger = logger.Get()
 	}
 	if config.ClientFactory == nil {
-		return nil, errors.New(ClientFactoryNilErrMsg)
+		return nil, ErrClientFactoryNil
 	}
 	if config.CloudWatchLogStream == "" {
-		return nil, errors.New(CloudWatchLogStreamNotSetErrMsg)
+		return nil, ErrCloudWatchLogStreamNotSet
 	}
 	if config.CloudwatchLogGroup == "" {
-		return nil, errors.New(CloudwatchLogGroupNotSetErrMsg)
+		return nil, ErrCloudwatchLogGroupNotSet
 	}
 	if config.Namespace == "" {
-		return nil, errors.New(MetricNamespaceNotSetErrMsg)
+		return nil, ErrMetricNamespaceNotSet
 	}
 	if config.RegionalBatchers == nil {
-		return nil, errors.New(RegionalBatchersNilErrMsg)
+		return nil, ErrRegionalBatchersNil
 	}
 	if config.JobManager == nil {
-		return nil, errors.New(JobManagerNilErrMsg)
+		return nil, ErrJobManagerNil
 	}
 	if config.ServiceConfig == nil {
-		return nil, errors.New(ServiceConfigNilErrMsg)
+		return nil, ErrServiceConfigNil
 	}
 	if config.Store == nil {
-		return nil, errors.New(StoreNilErrMsg)
+		return nil, ErrStoreNil
 	}
 
 	return &ResourceQuotaHandler{

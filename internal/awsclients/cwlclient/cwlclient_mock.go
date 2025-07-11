@@ -88,7 +88,7 @@ func (f *FakeCloudWatchLogsClient) DescribeLogGroups(
 
 // DescribeLogStreams pages through DescribeLogStreamsPages, honoring NextToken
 // and injecting an error when callDescribeLogStreamsCount == ErrOnDescribeLogStreamsCall.
-func (f *FakeCloudWatchLogsClient) DescribeLogStreams( // <— fix receiver name
+func (f *FakeCloudWatchLogsClient) DescribeLogStreams(
 	ctx context.Context,
 	in *cloudwatchlogs.DescribeLogStreamsInput,
 	optFns ...func(*cloudwatchlogs.Options),

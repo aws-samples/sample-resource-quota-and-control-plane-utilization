@@ -1,14 +1,15 @@
+// Package cloudtrail provides file-based batching of CloudTrail events into EMF records.
+// It handles event accumulation, threshold-based flushing, and aggregation for rate limiting metrics.
 package cloudtrail
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/outofoffice3/aws-samples/geras/internal/emf"
@@ -17,47 +18,49 @@ import (
 	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
+// isValidRegion validates that the region string contains only safe characters
+// and matches AWS region naming patterns to prevent path traversal attacks.
+func isValidRegion(region string) bool {
+	// AWS regions follow pattern: us-east-1, eu-west-2, etc.
+	validRegion := regexp.MustCompile(`^[a-z0-9-]+$`)
+	return len(region) > 0 && len(region) < 50 && validRegion.MatchString(region)
+}
+
+// Batcher defines the interface for batching CloudTrail events and flushing them as EMF records.
 type Batcher interface {
 	Add(ctx context.Context, region string, ct sharedTypes.CloudTrailEvent)
 	FlushAll(ctx context.Context, time time.Time) error
 }
 
-// CTFileBatcher batches CloudTrail events into files and flushes aggregated EMFs.
+// CTFileBatcher batches CloudTrail events into region-specific counter files,
+// manages threshold-based flushing, and creates EMF records from counters.
 type CTFileBatcher struct {
 	baseDir            string
 	namespace          string
 	metricName         string
 	lastFlushFilePath  string
 	lambdaInitFilePath string
-	maxCount           int
-	maxBytes           int64
 	propagrateInvoker  bool
 
 	emfFlusher emf.EMFFlusher
-	aggregator EMFAggregator
 	logger     logger.Logger
-
-	mu     sync.Mutex
-	counts map[string]int
-	sizes  map[string]int64
 }
 
-// CTFileBatcherConfig holds configuration for CTFileBatcher.
+// CTFileBatcherConfig holds all configuration parameters needed to create
+// and configure a CTFileBatcher instance.
 type CTFileBatcherConfig struct {
 	BaseDir            string
 	Namespace          string
 	MetricName         string
 	LastFlushFilePath  string
 	LambdaInitFilePath string
-	MaxCount           int
-	MaxBytes           int64
 	PropagateInvoker   bool
-	Aggregator         EMFAggregator
 	EmfFlusher         emf.EMFFlusher
 	Logger             logger.Logger
 }
 
-// NewCTFileBatcher constructs a new file-based CloudTrail batcher.
+// NewCTFileBatcher constructs a new file-based CloudTrail batcher with
+// the provided configuration and initializes internal state.
 func NewCTFileBatcher(cfg CTFileBatcherConfig) Batcher {
 	if cfg.Logger == nil {
 		cfg.Logger = logger.Get()
@@ -66,197 +69,217 @@ func NewCTFileBatcher(cfg CTFileBatcherConfig) Batcher {
 		baseDir:            cfg.BaseDir,
 		namespace:          cfg.Namespace,
 		metricName:         cfg.MetricName,
-		maxCount:           cfg.MaxCount,
-		maxBytes:           cfg.MaxBytes,
 		lastFlushFilePath:  cfg.LastFlushFilePath,
 		lambdaInitFilePath: cfg.LambdaInitFilePath,
 		propagrateInvoker:  cfg.PropagateInvoker,
 		emfFlusher:         cfg.EmfFlusher,
-		aggregator:         cfg.Aggregator,
 		logger:             cfg.Logger,
-		counts:             make(map[string]int),
-		sizes:              make(map[string]int64),
 	}
 }
 
-// Add writes one (or two, if enabled) EMF records for a CloudTrail event,
-// performs a pre‐add threshold check (flushing if necessary), then appends
-// each record to the region’s NDJSON file, updates counters, and kicks off
-// an async post‐add flush if thresholds are exceeded again.
+// Add processes a CloudTrail event by creating EMF records, checking thresholds,
+// writing to region-specific files, and triggering flushes when limits are exceeded.
 func (fb *CTFileBatcher) Add(ctx context.Context, region string, ct sharedTypes.CloudTrailEvent) {
-	// 1) Build EMF record(s)
-	var records []builder.EMFRecord
-	fb.logger.Debug("creating emf for event: %+v", ct)
-	// overall event count
-	overallRec, err := builder.Build(builder.EMFInput{
-		Namespace:  fb.namespace,
-		MetricName: fb.metricName,
-		Value:      1,
-		Unit:       builder.MetricUnitCount,
-		Dimensions: [][]string{{"eventName", ct.EventName}},
-		Timestamp:  ct.EventTime,
-	}, fb.logger)
-	if err != nil {
-		fb.logger.Error("Add: build overall EMF error: %v", err)
+	if !isValidRegion(region) {
+		fb.logger.Error("Add: invalid region name: %s", region)
 		return
 	}
-	records = append(records, overallRec)
-	fb.logger.Info("created emf record %s", string(overallRec.Payload))
 
-	// optional per‐principal count
+	fb.logger.Debug("processing event: %+v", ct)
+
+	// Generate counter keys
+	keys := []string{ct.EventName} // Always have simple eventName counter
+
 	if fb.propagrateInvoker {
-		fb.logger.Debug("propagate invoker=%v. creating multi-dimensional metric", fb.propagrateInvoker)
 		invoker := ExtractInvoker(ct)
 		fb.logger.Debug("invoker=%s", invoker)
-		princRec, err := builder.Build(builder.EMFInput{
-			Namespace:  fb.namespace,
-			MetricName: fb.metricName,
-			Value:      1,
-			Unit:       builder.MetricUnitCount,
-			Dimensions: [][]string{
-				{"eventName", ct.EventName},
-				{"invoker", invoker},
-			},
-			Timestamp: ct.EventTime,
-		}, fb.logger)
-		if err != nil {
-			fb.logger.Error("Add: build principal EMF error: %v", err)
+		invokerKey := fmt.Sprintf("%s:%s", ct.EventName, invoker)
+		keys = append(keys, invokerKey)
+	}
+
+	// Update counters for each key
+	for _, key := range keys {
+		if err := fb.incrementCounter(region, key); err != nil {
+			fb.logger.Error("increment counter %s/%s: %v", region, key, err)
 		} else {
-			records = append(records, princRec)
-			fb.logger.Debug("created multi-dimensional emf record %s", string(princRec.Payload))
+			fb.logger.Debug("incremented counter %s/%s", region, key)
 		}
-	}
-
-	// 2) Pre‐add threshold check
-	fb.mu.Lock()
-	currCount := fb.counts[region]
-	currSize := fb.sizes[region]
-	fb.mu.Unlock()
-
-	// Calculate total after adding these records
-	newCount := currCount + len(records)
-	var newBytes int64
-	for _, r := range records {
-		newBytes += int64(len(r.Payload) + 1)
-	}
-	newSize := currSize + newBytes
-
-	if (fb.maxCount > 0 && newCount > fb.maxCount) ||
-		(fb.maxBytes > 0 && newSize > fb.maxBytes) {
-		fb.logger.Info("Add: pre‐threshold reached for region %s (count %d/%d, size %d/%d), flushing first",
-			region, newCount, fb.maxCount, newSize, fb.maxBytes)
-		if err := fb.FlushAll(ctx, time.Now()); err != nil {
-			fb.logger.Error("Add: flush error (pre‐threshold) for region %s: %v", region, err)
-		}
-		// reset our view for post‐flush
-		currCount = 0
-		currSize = 0
-	}
-
-	// 3) Write each record to file & update counters
-	filePath := filepath.Join(fb.baseDir, fmt.Sprintf("emf_%s.ndjson", region))
-	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		fb.logger.Error("Add: unable to open file %s: %v", filePath, err)
-		return
-	}
-	defer f.Close()
-
-	for _, r := range records {
-		fb.logger.Debug("adding emf record %s", string(r.Payload))
-		if _, err := f.Write(r.Payload); err != nil {
-			fb.logger.Error("Add: write payload error: %v", err)
-			continue
-		}
-		if _, err := f.Write([]byte("\n")); err != nil {
-			fb.logger.Error("Add: write newline error: %v", err)
-			continue
-		}
-		recSize := int64(len(r.Payload) + 1)
-		fb.mu.Lock()
-		fb.counts[region]++
-		fb.sizes[region] += recSize
-		fb.mu.Unlock()
-		fb.logger.Debug("successfully added emf record %s", string(r.Payload))
-	}
-
-	// 4) Post‐add threshold check (async flush)
-	fb.mu.Lock()
-	finalCount := fb.counts[region]
-	finalSize := fb.sizes[region]
-	fb.mu.Unlock()
-
-	if (fb.maxCount > 0 && finalCount >= fb.maxCount) ||
-		(fb.maxBytes > 0 && finalSize >= fb.maxBytes) {
-		fb.logger.Info("Add: post‐threshold reached for region %s (count %d, size %d), flushing async",
-			region, finalCount, finalSize)
-		go func(r string) {
-			if err := fb.FlushAll(ctx, time.Now()); err != nil {
-				fb.logger.Error("Add: async flush error for region %s: %v", r, err)
-			}
-		}(region)
 	}
 }
 
+// incrementCounter atomically updates the counter for a specific region and key.
+func (fb *CTFileBatcher) incrementCounter(region, key string) error {
+	filePath := filepath.Join(fb.baseDir, fmt.Sprintf("counters_%s.json", region))
+	
+	// Read existing counters
+	counters, err := fb.readCounterFile(region)
+	if err != nil {
+		return err
+	}
+	
+	// Increment counter
+	counters[key]++
+	
+	// Write back atomically
+	data, err := json.Marshal(counters)
+	if err != nil {
+		return err
+	}
+	
+	// Atomic write pattern
+	tempFile := filePath + ".tmp"
+	if err := os.WriteFile(tempFile, data, 0600); err != nil {
+		return err
+	}
+	
+	return os.Rename(tempFile, filePath)
+}
+
+// readCounterFile reads the counter file for a specific region.
+func (fb *CTFileBatcher) readCounterFile(region string) (map[string]int, error) {
+	filePath := filepath.Join(fb.baseDir, fmt.Sprintf("counters_%s.json", region))
+	
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]int), nil // Return empty map if file doesn't exist
+		}
+		return nil, err
+	}
+	
+	var counters map[string]int
+	if err := json.Unmarshal(data, &counters); err != nil {
+		return nil, err
+	}
+	
+	return counters, nil
+}
+
+// parseCounterKey parses a counter key into EMF dimensions.
+func (fb *CTFileBatcher) parseCounterKey(key string) [][]string {
+	parts := strings.Split(key, ":")
+	
+	if len(parts) == 1 {
+		// Simple case: just eventName
+		return [][]string{{"eventName", parts[0]}}
+	}
+	
+	if len(parts) >= 3 {
+		// Complex case: eventName:invokerType:invokerName
+		eventName := parts[0]
+		invoker := strings.Join(parts[1:], ":")
+		
+		return [][]string{
+			{"eventName", eventName},
+			{"invoker", invoker},
+		}
+	}
+	
+	// Fallback for malformed keys
+	return [][]string{{"eventName", key}}
+}
+
+// getRegions returns all regions that have counter files.
+func (fb *CTFileBatcher) getRegions() []string {
+	files, err := filepath.Glob(filepath.Join(fb.baseDir, "counters_*.json"))
+	if err != nil {
+		return nil
+	}
+	
+	var regions []string
+	for _, file := range files {
+		base := filepath.Base(file)
+		if strings.HasPrefix(base, "counters_") && strings.HasSuffix(base, ".json") {
+			region := base[9 : len(base)-5] // Remove "counters_" and ".json"
+			regions = append(regions, region)
+		}
+	}
+	return regions
+}
+
+// clearCounterFile removes the counter file for a region after successful flush.
+func (fb *CTFileBatcher) clearCounterFile(region string) {
+	filePath := filepath.Join(fb.baseDir, fmt.Sprintf("counters_%s.json", region))
+	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+		fb.logger.Error("clear counter file %s: %v", filePath, err)
+	}
+}
+
+// FlushAll reads counters, creates EMF records, and flushes to CloudWatch.
 func (fb *CTFileBatcher) FlushAll(ctx context.Context, flushTime time.Time) error {
-	// 0a) Try the last‐flush file that was injected
+	// Calculate elapsed time
 	lastFlush := time.Time{}
 	if data, err := os.ReadFile(fb.lastFlushFilePath); err == nil {
 		if t, err := time.Parse(time.RFC3339Nano, string(data)); err == nil {
 			lastFlush = t
-			fb.logger.Debug("last flush file found. timestamp, %s", string(data))
 		}
 	}
-	// 0b) Fallback: try the Lambda init timestamp file
 	if lastFlush.IsZero() {
 		initPath := filepath.Join(fb.baseDir, fb.lambdaInitFilePath)
 		if data, err := os.ReadFile(initPath); err == nil {
 			if t, err := time.Parse(time.RFC3339Nano, string(data)); err == nil {
 				lastFlush = t
-				fb.logger.Debug("falling back to lambda init fime, %s", string(data))
 			}
 		}
 	}
-	// 0c) Ultimate fallback: assume 60s
 	if lastFlush.IsZero() {
 		lastFlush = flushTime.Add(-60 * time.Second)
-		fb.logger.Warn("last flush and init time empty.  using fallback to 60s")
 	}
 
-	// 1) Compute elapsed and guard against non‐positive
 	elapsed := flushTime.Sub(lastFlush).Seconds()
 	if elapsed <= 0 {
 		elapsed = 60
 	}
-	fb.logger.Info("elapsed time=%.2f", elapsed)
 
-	// 2) For each region: read file, aggregate with NormFactor = 1/elapsed, flush, reset
-	regions := fb.snapshotRegions()
+	// Process each region's counters
+	regions := fb.getRegions()
 	for _, region := range regions {
-		raw, err := fb.readRegionFile(region)
+		counters, err := fb.readCounterFile(region)
 		if err != nil {
-			fb.logger.Error("read region %s: %v", region, err)
+			fb.logger.Error("read counters for region %s: %v", region, err)
 			continue
 		}
-		cfg := AggregateConfig{
-			Namespace:  fb.namespace,
-			MetricName: fb.metricName,
-			NormFactor: 1.0 / elapsed,
-			FlushTime:  flushTime,
-			Logger:     fb.logger,
+
+		// Create EMF records from counters
+		var records []builder.EMFRecord
+		for key, count := range counters {
+			if count == 0 {
+				continue
+			}
+
+			// Calculate rate
+			rate := float64(count) / elapsed
+
+			// Parse dimensions from key
+			dimensions := fb.parseCounterKey(key)
+
+			// Create EMF record
+			record, err := builder.Build(builder.EMFInput{
+				Namespace:  fb.namespace,
+				MetricName: fb.metricName,
+				Value:      rate,
+				Unit:       builder.MetricUnitCount,
+				Dimensions: dimensions,
+				Timestamp:  flushTime,
+			}, fb.logger)
+			if err != nil {
+				fb.logger.Error("build EMF record: %v", err)
+				continue
+			}
+			records = append(records, record)
 		}
-		batch, err := fb.aggregator.Aggregate(ctx, raw, cfg)
-		if err != nil {
-			fb.logger.Error("aggregate region %s: %v", region, err)
-			continue
+
+		// Flush records
+		if len(records) > 0 {
+			if err := fb.emfFlusher.Flush(ctx, region, records); err != nil {
+				fb.logger.Error("flush region %s: %v", region, err)
+			} else {
+				fb.clearCounterFile(region)
+			}
 		}
-		if err := fb.emfFlusher.Flush(ctx, region, batch); err != nil {
-			fb.logger.Error("flush region %s: %v", region, err)
-		}
-		fb.resetRegion(region)
 	}
 
-	// 3) Persist this flush as the next “lastFlush”
+	// Save flush timestamp
 	if err := os.WriteFile(fb.lastFlushFilePath,
 		[]byte(flushTime.Format(time.RFC3339Nano)),
 		0o644,
@@ -267,109 +290,8 @@ func (fb *CTFileBatcher) FlushAll(ctx context.Context, flushTime time.Time) erro
 	return nil
 }
 
-// snapshotRegions returns a slice of all regions currently tracked.
-func (fb *CTFileBatcher) snapshotRegions() []string {
-	fb.mu.Lock()
-	defer fb.mu.Unlock()
-
-	regions := make([]string, 0, len(fb.counts))
-	for r := range fb.counts {
-		regions = append(regions, r)
-	}
-	return regions
-}
-
-// readRegionFile reads the NDJSON file for one region and reconstructs EMFRecords,
-// extracting dimensions and timestamps from the JSON payload.
-func (fb *CTFileBatcher) readRegionFile(region string) ([]builder.EMFRecord, error) {
-	path := filepath.Join(fb.baseDir, fmt.Sprintf("emf_%s.ndjson", region))
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var records []builder.EMFRecord
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-
-		// parse into a generic map
-		var doc map[string]any
-		if err := json.Unmarshal(line, &doc); err != nil {
-			continue
-		}
-
-		// pull out the _aws block
-		awsBlock, ok := doc["_aws"].(map[string]any)
-		if !ok {
-			continue
-		}
-
-		// extract timestamp (ms)
-		tsVal, ok := awsBlock["Timestamp"].(float64)
-		if !ok {
-			continue
-		}
-		ts := time.UnixMilli(int64(tsVal))
-
-		// extract the dimension names array
-		cwMetrics, ok := awsBlock["CloudWatchMetrics"].([]any)
-		if !ok || len(cwMetrics) == 0 {
-			continue
-		}
-		metricDef, ok := cwMetrics[0].(map[string]any)
-		if !ok {
-			continue
-		}
-		dimsAny, ok := metricDef["Dimensions"].([]any)
-		if !ok || len(dimsAny) == 0 {
-			continue
-		}
-		nameList, ok := dimsAny[0].([]any)
-		if !ok {
-			continue
-		}
-
-		// rebuild [][]string from names + doc[name] values
-		var dims [][]string
-		for _, n := range nameList {
-			name, ok := n.(string)
-			if !ok {
-				continue
-			}
-			val := fmt.Sprint(doc[name])
-			dims = append(dims, []string{name, val})
-		}
-
-		records = append(records, builder.EMFRecord{
-			Payload:    append([]byte(nil), line...), // clone
-			TimeStamp:  ts,
-			Dimensions: dims,
-		})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return records, nil
-}
-
-// resetRegion truncates the region file and zeroes out counts/sizes.
-func (fb *CTFileBatcher) resetRegion(region string) {
-	path := filepath.Join(fb.baseDir, fmt.Sprintf("emf_%s.ndjson", region))
-	if err := os.Truncate(path, 0); err != nil {
-		fb.logger.Error("resetRegion: truncate %s: %v", path, err)
-	}
-
-	fb.mu.Lock()
-	defer fb.mu.Unlock()
-	fb.counts[region] = 0
-	fb.sizes[region] = 0
-}
-
-// ExtractInvoker returns a string of the form "<Type>:<Invoker>"
-// where Invoker is the minimal identifier for the caller, chosen
-// according to AWS docs. If nothing can be found, returns "<Type>:unknownInvoker".
+// ExtractInvoker extracts the invoker identity from a CloudTrail event,
+// returning a formatted string "<Type>:<Invoker>" based on AWS identity types.
 func ExtractInvoker(ct sharedTypes.CloudTrailEvent) string {
 	id := ct.UserIdentity
 	t := id.Type
@@ -384,7 +306,7 @@ func ExtractInvoker(ct sharedTypes.CloudTrailEvent) string {
 		}
 
 	case "IAMUser":
-		// userName isn’t in our struct, so fall back to last ARN segment
+		// userName isn't in our struct, so fall back to last ARN segment
 		inv = lastSegment(id.ARN)
 
 	case "AssumedRole", "Role":
@@ -443,7 +365,7 @@ func ExtractInvoker(ct sharedTypes.CloudTrailEvent) string {
 	return fmt.Sprintf("%s:%s", t, inv)
 }
 
-// lastSegment returns everything after the final '/' in arn.
+// lastSegment extracts the final segment after the last '/' in an ARN string.
 func lastSegment(arn string) string {
 	parts := strings.Split(arn, "/")
 	if len(parts) > 1 {
@@ -454,6 +376,8 @@ func lastSegment(arn string) string {
 
 // extractAfterPrefix finds "<prefix>/<name>" in arn and returns <name>.
 // E.g. prefix="assumed-role", arn="arn:...:assumed-role/MyRole/..." → "MyRole".
+// extractAfterPrefix finds a specific prefix in an ARN and returns the next segment.
+// Used to extract role names from assumed-role or federated-user ARNs.
 func extractAfterPrefix(arn, prefix string) string {
 	parts := strings.Split(arn, "/")
 	for i := 0; i+1 < len(parts); i++ {

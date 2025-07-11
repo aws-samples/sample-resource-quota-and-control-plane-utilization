@@ -1,8 +1,11 @@
+// Package flusher provides functionality for sending EMF records to CloudWatch Logs.
+// It handles batching, sorting, and transmission of EMF documents for metric ingestion.
 package flusher
 
 import (
 	"context"
 	"fmt"
+	"html"
 	"sort"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,12 +17,14 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 )
 
-// EMFFlusher sends batches of EMFRecords to CloudWatch Logs.
+// EMFFlusher defines the interface for sending batches of EMF records
+// to CloudWatch Logs for automatic metric extraction.
 type EMFFlusher interface {
 	Flush(ctx context.Context, region string, batch []builder.EMFRecord) error
 }
 
-// EMFFlusherConfig holds dependencies for the flusher.
+// EMFFlusherConfig holds all dependencies and configuration needed
+// to create and configure an EMF flusher instance.
 type EMFFlusherConfig struct {
 	CwlClientMap  *safemap.TypedMap[cwlclient.CloudWatchLogsClient]
 	LogGroupName  string
@@ -27,28 +32,26 @@ type EMFFlusherConfig struct {
 	Logger        logger.Logger
 }
 
-// EMFFlusherImpl is the standard implementation.
+// EMFFlusherImpl is the standard implementation of EMFFlusher that
+// sends EMF records to CloudWatch Logs using the AWS SDK.
 type EMFFlusherImpl struct {
 	cfg EMFFlusherConfig
 }
 
-// NewEMFFlusher constructs an EMFFlusher from config.
+// NewEMFFlusher constructs a new EMFFlusher instance with the provided
+// configuration and dependencies.
 func NewEMFFlusher(cfg EMFFlusherConfig) EMFFlusher {
 	return &EMFFlusherImpl{cfg: cfg}
 }
 
-// Flush implements the EMFFlusher interface.
-func (e *EMFFlusherImpl) Flush(ctx context.Context, region string, batch []builder.EMFRecord) error {
+// Flush sends a batch of EMF records to CloudWatch Logs for the specified region,
+// sorting by timestamp and handling the log event creation and transmission.
+func (f *EMFFlusherImpl) Flush(ctx context.Context, region string, batch []builder.EMFRecord) error {
 	if len(batch) == 0 {
-		e.cfg.Logger.Info("no records to flush for region %s", region)
+		f.cfg.Logger.Info("no records to flush for region %s", region)
 		return nil
 	}
-	// sort by timestamp
-	sort.Slice(batch, func(i, j int) bool {
-		return batch[i].TimeStamp.Before(batch[j].TimeStamp)
-	})
-
-	client, ok := e.cfg.CwlClientMap.Load(region)
+	client, ok := f.cfg.CwlClientMap.Load(region)
 	if !ok {
 		return fmt.Errorf("no client for region %s", region)
 	}
@@ -62,21 +65,27 @@ func (e *EMFFlusherImpl) Flush(ctx context.Context, region string, batch []build
 		}
 	}
 
+	// sort events by timestamp as required by CloudWatch Logs
+	sort.Slice(events, func(i, j int) bool {
+		return *events[i].Timestamp < *events[j].Timestamp
+	})
+
 	// send
 	_, err := client.PutLogEvents(ctx, &cloudwatchlogs.PutLogEventsInput{
-		LogGroupName:  aws.String(e.cfg.LogGroupName),
-		LogStreamName: aws.String(e.cfg.LogStreamName),
+		LogGroupName:  aws.String(f.cfg.LogGroupName),
+		LogStreamName: aws.String(f.cfg.LogStreamName),
 		LogEvents:     events,
 	})
 	if err != nil {
-		e.cfg.Logger.Error("flush error: %v", err)
+		f.cfg.Logger.Error("flush error: %v", err)
 		return err
 	}
-	e.cfg.Logger.Info("flushed %d records to %s/%s in %s", len(events), e.cfg.LogGroupName, e.cfg.LogStreamName, region)
+	f.cfg.Logger.Info("flushed %d records to %s/%s in %s", len(events), f.cfg.LogGroupName, f.cfg.LogStreamName, region)
 	return nil
 }
 
-// MakeFlushFunc is a generic helper for any T→[]byte, timestamp extractor.
+// MakeFlushFunc creates a generic flush function for any type T that can be converted
+// to log events with custom payload and timestamp extraction functions.
 func MakeFlushFunc[T any](
 	client cwlclient.CloudWatchLogsClient,
 	logGroup, logStream string,
@@ -91,7 +100,7 @@ func MakeFlushFunc[T any](
 		events := make([]cwlTypes.InputLogEvent, len(batch))
 		for i, rec := range batch {
 			events[i] = cwlTypes.InputLogEvent{
-				Message:   aws.String(string(extractPayload(rec))),
+				Message:   aws.String(html.EscapeString(string(extractPayload(rec)))), // import "html"
 				Timestamp: aws.Int64(extractTimestamp(rec)),
 			}
 		}

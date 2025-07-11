@@ -84,7 +84,7 @@ When deploying with Terraform:
 | LOG_LEVEL        | Log verbosity (DEBUG, INFO, WARN, ERROR)                                      | INFO |
 | LOG_GROUP_NAME   | CloudWatch Logs group name for EMF output                                     |  /lambda/resourcequota/emf  |
 | METRIC_NAMESPACE | CloudWatch Metric Namespace                                                   |  Resource Quota Utilization |
-| LAMBDA_LAYER_PATH | path to the location of the config.json file in the lambda layer.  If you made any changes to the lambda layer. You need to make sure to update this variable accordingly. | /opt/config/config.json |
+| LAMBDA_LAYER_PATH | Path to the location of the config.json file in the Lambda layer. If you made any changes to the Lambda layer, you need to update this variable accordingly. | /opt/config/config.json |
 
 
 ### Deploying with AWS SAM / Cloudformation
@@ -128,7 +128,7 @@ git clone https://github.com/aws-samples/sample-resource-quota-and-control-plane
 ```
 2. **Build & deploy with AWS SAM / Cloudformation**
 
-Navigate to the `infra/cloudformation/resourcequota` folder.  Ensure there is a template.yaml file located in that directory. 
+Navigate to the `infra/cloudformation/resourcequota` folder. Ensure there is a template.yaml file located in that directory. 
 ```bash 
 root-dir/
         infra/
@@ -144,7 +144,7 @@ sam build
 sam deploy --guided
 ```
 
->Tip: Use sam deploy --guided on your first deployment 
+> **Tip:** Use `sam deploy --guided` on your first deployment 
 
 ---
 
@@ -153,7 +153,7 @@ sam deploy --guided
 Prior to deploying, please review the resource below to see what Terraform will deploy.  
 
 #### ⚠️ Warning ⚠️
-Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not verified to be production ready by default
+Please make changes to the template based on your specific environment and security requirements. This is a functional sample but is not verified to be production-ready by default.
 
 #### Resources 
 | Resource                                           | Type                              | Description                                                              | Key Properties                                                                                                                              |
@@ -214,7 +214,7 @@ dist/
 
 3. **Initialize and apply Terraform plan**
 ```bash
-#Initialize Terraform
+# Initialize Terraform
 terraform init
 
 # Create an execution plan and save it to tfplan

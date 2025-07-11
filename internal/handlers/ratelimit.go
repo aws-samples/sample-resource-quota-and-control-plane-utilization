@@ -62,6 +62,11 @@ func NewRateLimitHandler(config RateLimitHandlerConfig) (*RateLimitHandler, erro
 	return rlh, nil
 }
 
+// FlushCommand represents a flush command message structure.
+type FlushCommand struct {
+	Flush bool `json:"flush"`
+}
+
 // HandleEvent processes SQS messages containing CloudTrail events or flush commands.
 // Returns failed message IDs for partial batch failure handling in Lambda.
 func (rlh *RateLimitHandler) HandleEvent(
@@ -73,37 +78,51 @@ func (rlh *RateLimitHandler) HandleEvent(
 	}
 	rlh.Logger.Info("Received %d records from SQS event", len(event.Records))
 
+	// Process messages sequentially
 	var failures []events.SQSBatchItemFailure
-
 	for _, msg := range event.Records {
-		// detect flush command
-		var meta struct {
-			Flush bool `json:"flush"`
+		if failure := rlh.processMessage(ctx, msg); failure != nil {
+			failures = append(failures, *failure)
 		}
-		if err := json.Unmarshal([]byte(msg.Body), &meta); err == nil && meta.Flush {
-			rlh.Logger.Info("received FLUSH event from event bridge")
-			err := rlh.Batcher.FlushAll(ctx, time.Now())
-			if err != nil {
-				rlh.Logger.Error("flush error: %v", err)
-			}
-			rlh.Logger.Info("flushed all CloudTrail EMF records due to flush message %s", msg.MessageId)
-			continue
-		}
-
-		// normal CloudTrail event
-		var ctEvent sharedtypes.CloudTrailEvent
-		if err := json.Unmarshal([]byte(msg.Body), &ctEvent); err != nil {
-			rlh.Logger.Error("failed to unmarshal SQS message %s: %v", msg.MessageId, err)
-			failures = append(failures, events.SQSBatchItemFailure{ItemIdentifier: msg.MessageId})
-			continue
-		}
-
-		// add to batcher
-		rlh.Logger.Info("received cloudtrail event=%+v", ctEvent)
-		rlh.Batcher.Add(ctx, ctEvent.AWSRegion, ctEvent)
 	}
 
 	return failures, nil
+}
+
+// processMessage handles individual SQS message processing.
+func (rlh *RateLimitHandler) processMessage(ctx context.Context, msg events.SQSMessage) *events.SQSBatchItemFailure {
+	if rlh.isFlushCommand(msg.Body) {
+		rlh.handleFlushCommand(ctx, msg.MessageId)
+		return nil
+	}
+	return rlh.handleCloudTrailEvent(ctx, msg)
+}
+
+// isFlushCommand checks if message is a flush command.
+func (rlh *RateLimitHandler) isFlushCommand(body string) bool {
+	var cmd FlushCommand
+	return json.Unmarshal([]byte(body), &cmd) == nil && cmd.Flush
+}
+
+// handleFlushCommand processes flush commands.
+func (rlh *RateLimitHandler) handleFlushCommand(ctx context.Context, messageId string) {
+	rlh.Logger.Info("received FLUSH event from event bridge")
+	if err := rlh.Batcher.FlushAll(ctx, time.Now()); err != nil {
+		rlh.Logger.Error("flush error: %v", err)
+	}
+	rlh.Logger.Info("flushed all CloudTrail EMF records due to flush message %s", messageId)
+}
+
+// handleCloudTrailEvent processes CloudTrail events.
+func (rlh *RateLimitHandler) handleCloudTrailEvent(ctx context.Context, msg events.SQSMessage) *events.SQSBatchItemFailure {
+	var ctEvent sharedtypes.CloudTrailEvent
+	if err := json.Unmarshal([]byte(msg.Body), &ctEvent); err != nil {
+		rlh.Logger.Error("failed to unmarshal SQS message %s: %v", msg.MessageId, err)
+		return &events.SQSBatchItemFailure{ItemIdentifier: msg.MessageId}
+	}
+	rlh.Logger.Info("received cloudtrail event=%+v", ctEvent)
+	rlh.Batcher.Add(ctx, ctEvent.AWSRegion, ctEvent)
+	return nil
 }
 
 // LogAndReturnError provides centralized error logging for handler operations.

@@ -1,4 +1,5 @@
-// internal/emf/batch/metrics/batcher.go
+// Package metrics provides in-memory batching of CloudWatch metrics into EMF records.
+// It handles metric accumulation, threshold-based flushing, and EMF record creation.
 package metrics
 
 import (
@@ -11,12 +12,14 @@ import (
 	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
+// Batcher defines the interface for batching CloudWatch metrics and flushing them as EMF records.
 type Batcher interface {
 	Add(ctx context.Context, m sharedTypes.CloudWatchMetric)
 	FlushAll(ctx context.Context)
 }
 
-// MetricsBatcher batches CloudWatchMetric items in-memory and flushes them as EMF records.
+// MetricsBatcher batches CloudWatchMetric items in-memory with threshold-based flushing,
+// converting metrics to EMF records for CloudWatch ingestion.
 type MetricsBatcher struct {
 	namespace string
 	logGroup  string
@@ -34,7 +37,8 @@ type MetricsBatcher struct {
 	size    int64
 }
 
-// MetricsBatcherConfig defines settings for a MetricsBatcher.
+// MetricsBatcherConfig defines all configuration parameters needed to create
+// and configure a MetricsBatcher instance.
 type MetricsBatcherConfig struct {
 	Namespace  string         // EMF namespace
 	LogGroup   string         // CloudWatch Logs group
@@ -46,7 +50,8 @@ type MetricsBatcherConfig struct {
 	Logger     logger.Logger  // Logger instance
 }
 
-// NewMetricsBatcher constructs a new in-memory MetricsBatcher.
+// NewMetricsBatcher constructs a new in-memory MetricsBatcher with
+// the provided configuration and initializes internal state.
 func NewMetricsBatcher(cfg MetricsBatcherConfig) Batcher {
 	if cfg.Logger == nil {
 		cfg.Logger = logger.Get()
@@ -64,8 +69,8 @@ func NewMetricsBatcher(cfg MetricsBatcherConfig) Batcher {
 	}
 }
 
-// Add builds an EMF record for the given metric and appends to the batch.
-// Triggers a pre-flush if thresholds would be exceeded.
+// Add converts a CloudWatch metric to an EMF record, adds it to the batch,
+// and triggers pre-flush if size or count thresholds would be exceeded.
 func (mb *MetricsBatcher) Add(ctx context.Context, m sharedTypes.CloudWatchMetric) {
 	err := m.Unit.Validate()
 	if err != nil {
@@ -111,7 +116,8 @@ func (mb *MetricsBatcher) Add(ctx context.Context, m sharedTypes.CloudWatchMetri
 	mb.mu.Unlock()
 }
 
-// FlushAll flushes all accumulated EMF records and resets the batch.
+// FlushAll sends all accumulated EMF records to CloudWatch Logs and
+// resets the batch state for the next accumulation cycle.
 func (mb *MetricsBatcher) FlushAll(ctx context.Context) {
 	mb.mu.Lock()
 	batch := mb.records

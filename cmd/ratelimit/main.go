@@ -31,9 +31,6 @@ var (
 
 const (
 	// known service variables
-	maxEvents                   = 10000
-	maxBytes                    = 1 << 20
-	overhead                    = 26
 	LambdaInitTimestampFileName = "lambdaInitTimestamp.txt"
 	LastFlushTimestampFileName  = "lastFlushTimestamp.txt"
 
@@ -152,17 +149,13 @@ func main() {
 
 	// 7) CloudTrail EMF batcher
 	lastFlushFile := filepath.Join(os.TempDir(), LastFlushTimestampFileName)
-	aggregator := cloudtrail.NewDefaultEMFAggregator()
 	cloudtrailBatcher := cloudtrail.NewCTFileBatcher(cloudtrail.CTFileBatcherConfig{
+		BaseDir:            os.TempDir(),
 		Namespace:          namespace,
 		MetricName:         metricNameRequestsPerSecond,
-		BaseDir:            os.TempDir(),
-		MaxCount:           maxEvents,
-		MaxBytes:           maxBytes,
-		LambdaInitFilePath: initFile,
 		LastFlushFilePath:  lastFlushFile,
+		LambdaInitFilePath: LambdaInitTimestampFileName,
 		PropagateInvoker:   propagateInvoker,
-		Aggregator:         aggregator,
 		EmfFlusher:         flusher,
 		Logger:             appLogger,
 	})

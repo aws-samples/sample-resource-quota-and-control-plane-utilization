@@ -1,3 +1,4 @@
+# Rate Limit Monitor - Terraform configuration for event-driven CloudTrail API monitoring
 terraform {
   required_providers {
     aws = {
@@ -12,6 +13,7 @@ provider "aws" {}
 
 ###############################
 # 1) FIFO SQS Queues          #
+# Separate queues for each API #
 ###############################
 resource "aws_sqs_queue" "assume_role_queue" {
   name                        = "assume-role-queue.fifo"
@@ -29,6 +31,7 @@ resource "aws_sqs_queue" "assume_role_webidentity_queue" {
 
 ###################################
 # 2) IAM Roles & Attachments      #
+# Lambda execution and EventBridge#
 ###################################
 data "aws_iam_policy" "lambda_basic" {
   arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
@@ -106,6 +109,7 @@ resource "aws_iam_role_policy" "eb_sqs_send" {
 
 ##############################################
 # 3) EventBridge Rules (scheduled & CT)     #
+# Flush pings and CloudTrail event capture  #
 ##############################################
 # Scheduled flush ping → AssumeRole
 resource "aws_cloudwatch_event_rule" "keepalive_assume_role" {
@@ -151,6 +155,7 @@ resource "aws_cloudwatch_event_rule" "assume_role_webid" {
 
 ###########################################
 # 4) EventBridge → SQS Targets            #
+# Route events to appropriate queues       #
 ###########################################
 # keepalive → AssumeRoleQueue
 resource "aws_cloudwatch_event_target" "keepalive_assume_role" {
@@ -233,6 +238,7 @@ resource "aws_sqs_queue_policy" "assume_role_webid_queue" {
 
 #################################################
 # 6) Go Lambdas + Event-Source Mappings         #
+# Process SQS messages and publish EMF metrics  #
 #################################################
 locals {
   # path.module == root/infra/terraform/ratelimit
@@ -306,7 +312,8 @@ resource "aws_lambda_event_source_mapping" "assume_role_webidentity_sqs" {
 }
 
 ####################################
-# 7) RPS Alarms (unchanged)        #
+# 7) CloudWatch RPS Alarms         #
+# Monitor API requests per second  #
 ####################################
 resource "aws_cloudwatch_metric_alarm" "assume_role_rps" {
   alarm_name          = "AssumeRole-rps-alarm"

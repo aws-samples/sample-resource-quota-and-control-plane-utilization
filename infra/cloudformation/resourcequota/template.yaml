@@ -1,5 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
+# Resource Quota Monitor - Scheduled Lambda for resource utilization monitoring
 
 Globals:
   Function:
@@ -40,7 +41,7 @@ Parameters:
 
 
 Resources:
-  ## IAM Role for Lambda execution with necessary permissions
+  # IAM Role for Lambda execution with resource quota monitoring permissions
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -101,7 +102,7 @@ Resources:
                 Resource:
                   - !Sub arn:aws:s3:::${S3BucketName}
 
-# Lambda Layer that stores the configuration for the solution
+  # Lambda Layer containing service configuration for resource quota monitoring
   ConfigFileLambdaLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:

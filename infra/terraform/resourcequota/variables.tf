@@ -1,3 +1,5 @@
+# Resource Quota Monitor - Terraform variables
+
 variable "cloudwatch_log_group" {
   description = "CloudWatch Log Group for EMF"
   type        = string

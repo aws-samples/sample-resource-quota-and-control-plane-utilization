@@ -156,5 +156,6 @@ func GenerateManifestKey(prefix, filename string, t time.Time) string {
 	}
 	timestamp := t.Format("2006-01-02_15-04-05")
 	file := fmt.Sprintf("%s_%s.csv", filename, timestamp)
+	// Use path.Join (not filepath.Join) for S3 object keys - always forward slashes
 	return path.Join(prefix, dateFolder, file)
 }

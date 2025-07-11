@@ -50,6 +50,10 @@ const (
 	defaultManifestBufferSize = 100
 	vpcNauManifestFilePrefix  = "vpc-network-address-usage-manifest"
 	vpcNauManifestFileName    = "naureport"
+
+	// Job submission retry configuration
+	defaultJobAddMaxRetries = 3
+	defaultJobAddBaseDelay  = 2 * time.Second
 )
 
 // Initialization errors
@@ -467,8 +471,11 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 								Cause:   err,
 							})
 						}
-						jm.AddJob(job)
-						log.Info("added network interfaces job for region: %s to job manager", region)
+						if err := addJobWithRetry(jm, job, log); err != nil {
+							log.Error("failed to add network interfaces job for region %s after retries: %v", region, err)
+						} else {
+							log.Info("added network interfaces job for region: %s to job manager", region)
+						}
 					}
 				}
 
@@ -504,8 +511,11 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 								Cause:   err,
 							})
 						}
-						jm.AddJob(job)
-						log.Info("added list clusters job for region: %s to job manager", region)
+						if err := addJobWithRetry(jm, job, log); err != nil {
+							log.Error("failed to add list clusters job for region %s after retries: %v", region, err)
+						} else {
+							log.Info("added list clusters job for region: %s to job manager", region)
+						}
 					}
 				}
 
@@ -541,8 +551,11 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 								Cause:   err,
 							})
 						}
-						jm.AddJob(job)
-						log.Info("added oidc providers job for region: %s to job manager", region)
+						if err := addJobWithRetry(jm, job, log); err != nil {
+							log.Error("failed to add oidc providers job for region %s after retries: %v", region, err)
+						} else {
+							log.Info("added oidc providers job for region: %s to job manager", region)
+						}
 					}
 					if qm.Name == "iamRoles" {
 						log.Info("creating IAM Roles job for region: %s", region)
@@ -565,8 +578,11 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 								Cause:   err,
 							})
 						}
-						jm.AddJob(job)
-						log.Info("added iam Roles job for region: %s to job manager", region)
+						if err := addJobWithRetry(jm, job, log); err != nil {
+							log.Error("failed to add iam Roles job for region %s after retries: %v", region, err)
+						} else {
+							log.Info("added iam Roles job for region: %s to job manager", region)
+						}
 					}
 				}
 
@@ -593,8 +609,11 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 								Cause:   err,
 							})
 						}
-						jm.AddJob(job)
-						log.Info("added gp3 storage job for region: %s to job manager", region)
+						if err := addJobWithRetry(jm, job, log); err != nil {
+							log.Error("failed to add gp3 storage job for region %s after retries: %v", region, err)
+						} else {
+							log.Info("added gp3 storage job for region: %s to job manager", region)
+						}
 					}
 				}
 
@@ -631,8 +650,11 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 								Cause:   err,
 							})
 						}
-						jm.AddJob(job)
-						log.Info("added vpc nau job for region: %s to job manager", region)
+						if err := addJobWithRetry(jm, job, log); err != nil {
+							log.Error("failed to add vpc nau job for region %s after retries: %v", region, err)
+						} else {
+							log.Info("added vpc nau job for region: %s to job manager", region)
+						}
 					}
 				}
 			}
@@ -684,6 +706,26 @@ type FatalInput struct {
 	Logger  logger.Logger
 	ErrType error // e.g. ErrCannotLoadEnvVar
 	Cause   error // the wrapped or underlying error, e.g. io.ErrNotExist
+}
+
+// addJobWithRetry attempts to add a job with exponential backoff retry logic.
+func addJobWithRetry(jm *job.JobManager, j job.Job, log logger.Logger) error {
+	for attempt := 0; attempt < defaultJobAddMaxRetries; attempt++ {
+		if err := jm.AddJob(j); err != nil {
+			if attempt == defaultJobAddMaxRetries-1 {
+				return err // Final attempt failed
+			}
+			
+			// Calculate exponential backoff: 100ms, 200ms, 400ms
+			backoff := defaultJobAddBaseDelay * time.Duration(1<<attempt)
+			log.Warn("job add failed for %s (attempt %d/%d), retrying in %v: %v", 
+				j.GetJobName(), attempt+1, defaultJobAddMaxRetries, backoff, err)
+			time.Sleep(backoff)
+			continue
+		}
+		return nil // Success
+	}
+	return fmt.Errorf("all retry attempts exhausted")
 }
 
 // fatal logs error and exits the process

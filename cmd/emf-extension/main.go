@@ -46,7 +46,21 @@ var (
 )
 
 func main() {
-	// 1) logger
+	log := setupLogger()
+	ctx := setupContext()
+	clientFactory := setupAWSFactory(ctx, log)
+	config := loadEnvironmentConfig(log)
+	batcher := setupBatcher(ctx, log, clientFactory, config)
+	runExtension(ctx, log, batcher)
+}
+
+type envConfig struct {
+	regions   []string
+	logGroup  string
+	namespace string
+}
+
+func setupLogger() logger.Logger {
 	lvl := strings.ToLower(os.Getenv(logLevelEnvVar))
 	var ll logger.LogLevel
 	switch lvl {
@@ -64,51 +78,57 @@ func main() {
 	logger.Init(ll, os.Stdout)
 	log := logger.Get()
 	log.Debug("%s log level %s", printPrefix, lvl)
+	return log
+}
 
-	// 2) ctx + shutdown signal
+func setupContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sigs
 		cancel()
 	}()
+	return ctx
+}
 
-	// 3) AWS factory
+func setupAWSFactory(ctx context.Context, log logger.Logger) factory.ClientFactory {
 	clientFactory, err := factory.NewFactory(ctx, log)
 	if err != nil {
 		log.Error("%s %s: %v", printPrefix, ErrMsgLoadAWSConfigFailed, err)
 		os.Exit(1)
 	}
+	return clientFactory
+}
 
-	// 4) env
+func loadEnvironmentConfig(log logger.Logger) envConfig {
 	rawRegions := os.Getenv(regionsEnvVar)
 	if rawRegions == "" {
 		handleInitError(log, fmt.Errorf("%w, %s", ErrMsgCannotLoadEnvVar, regionsEnvVar))
 	}
-	regions := strings.Split(rawRegions, ",")
-
 	logGroup := os.Getenv(cloudwatchGroupEnvVar)
 	if logGroup == "" {
 		handleInitError(log, fmt.Errorf("%s %w, %s", printPrefix, ErrMsgCannotLoadEnvVar, cloudwatchGroupEnvVar))
 	}
-
 	namespace := os.Getenv(metricNamespaceEnvVar)
 	if namespace == "" {
 		handleInitError(log, fmt.Errorf("%s %w, %s", printPrefix, ErrMsgCannotLoadEnvVar, metricNamespaceEnvVar))
 	}
+	return envConfig{
+		regions:   strings.Split(rawRegions, ","),
+		logGroup:  logGroup,
+		namespace: namespace,
+	}
+}
 
-	// 5) ensure CWL
+func setupBatcher(ctx context.Context, log logger.Logger, clientFactory factory.ClientFactory, config envConfig) cloudtrail.Batcher {
 	stream := utils.MakeStreamName()
-	if err := cwlclient.EnsureGroupAndStreamAcrossRegions(
-		ctx, regions, logGroup, stream, clientFactory); err != nil {
+	if err := cwlclient.EnsureGroupAndStreamAcrossRegions(ctx, config.regions, config.logGroup, stream, clientFactory); err != nil {
 		handleInitError(log, err)
 	}
 
-	// 6) build CWL client map
 	cwlMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
-	for _, r := range regions {
+	for _, r := range config.regions {
 		c, err := clientFactory.CreateCloudWatchLogs(r)
 		if err != nil {
 			handleInitError(log, err)
@@ -116,47 +136,45 @@ func main() {
 		cwlMap.Store(r, c)
 	}
 
-	// 7) flusher
 	ef := emf.NewEMFFlusher(flusher.EMFFlusherConfig{
 		CwlClientMap:  cwlMap,
-		LogGroupName:  logGroup,
+		LogGroupName:  config.logGroup,
 		LogStreamName: stream,
 		Logger:        log,
 	})
 
-	// 8) one‐time: write initial last‐flush timestamp so we have a baseline
 	lastFlushFile := filepath.Join(os.TempDir(), "lastFlushTimestamp.txt")
+	lambdaInitFile := filepath.Join(os.TempDir(), "lambdaInitTimestamp.txt")
 	now := time.Now().UTC()
 	if err := os.WriteFile(lastFlushFile, []byte(now.Format(time.RFC3339Nano)), 0644); err != nil {
 		log.Error("%s failed to write initial lastFlushTimestamp: %v", printPrefix, err)
 	}
+	if err := os.WriteFile(lambdaInitFile, []byte(now.Format(time.RFC3339Nano)), 0644); err != nil {
+		log.Error("%s failed to write lambda init timestamp: %v", printPrefix, err)
+	}
 
-	// 9) build a CTFileBatcher and register
-	agg := cloudtrail.NewDefaultEMFAggregator()
-	batcher := cloudtrail.NewCTFileBatcher(cloudtrail.CTFileBatcherConfig{
-		BaseDir:          os.TempDir(),
-		Namespace:        namespace,
-		MetricName:       metricNameRequestsPerSecond,
-		MaxCount:         0, // not used on shutdown flush
-		MaxBytes:         0, // not used on shutdown flush
-		PropagateInvoker: false,
-		Aggregator:       agg,
-		EmfFlusher:       ef,
-		Logger:           log,
+	return cloudtrail.NewCTFileBatcher(cloudtrail.CTFileBatcherConfig{
+		BaseDir:            os.TempDir(),
+		Namespace:          config.namespace,
+		MetricName:         metricNameRequestsPerSecond,
+		LastFlushFilePath:  lastFlushFile,
+		LambdaInitFilePath: "lambdaInitTimestamp.txt",
+		PropagateInvoker:   false,
+		EmfFlusher:         ef,
+		Logger:             log,
 	})
+}
 
-	// 10) register with Lambda Extensions API
+func runExtension(ctx context.Context, log logger.Logger, batcher cloudtrail.Batcher) {
 	res, err := extensionClient.Register(ctx, extensionName)
 	if err != nil {
 		panic(err)
 	}
 	log.Info("%s Registered: %v", printPrefix, prettyPrint(res))
 
-	// 11) hang until shutdown
 	processEvents(ctx, log)
 	log.Info("%s Got SHUTDOWN event, flushing all", printPrefix)
 
-	// 12) on shutdown, do one last aggregated flush using real now()
 	if err := batcher.FlushAll(context.Background(), time.Now().UTC()); err != nil {
 		log.Error("%s shutdown flush error: %v", printPrefix, err)
 	}
