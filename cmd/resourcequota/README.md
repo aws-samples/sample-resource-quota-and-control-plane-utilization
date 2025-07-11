@@ -1,11 +1,11 @@
 # Resource Quota Monitoring Solution
 
 1. [Overview](#overview)
-2. [Configuration](#configuration)
-3. [Deployment](#deployment)
-4. [Created Resources](#created-resources)
-5. [Creating an Alarm](#creating-an-alarm)
-6. [Testing / Code Coverage](#testing--code-coverage)
+2. [Deployment Guide](#deployment-guide)
+    - [Environment Variables](#environment-variables)
+    - [Deploying w/ AWS SAM / Cloudformation](#deploying-with-aws-sam--cloudformation)
+    - [Deploying w/ Terraform](#deploying-with-terraform)
+3. [Tips: Automating Deployment](#tip-automating-builds--deployment)
 
 ![Architecture Diagram](../../media/resource-quota-solution.png)
 
@@ -88,12 +88,10 @@ When deploying with Terraform:
 
 ### Deploying with AWS SAM / Cloudformation
 
-The high level steps to fully deploy this solution are: 
-- Cloning the repo
-- Deploying via AWS SAM
+Prior to deploying, please review the resource below to see what AWS SAM / Cloudformation will deploy. 
 
 #### ⚠️ Warning ⚠️
-Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not verified to be production ready by default
+Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not intended to be production ready by default
 
 #### Resources
 

@@ -15,6 +15,7 @@ This repository is provided as a functional example. It is not intended to repre
 - Be aware of any costs associated with deploying in your account(s)
 
 Use this sample as a starting point, not a drop-in solution. Customize this solution based on your organization’s security, reliability, and operational requirements.
+
 ---
 
 1. **Rate Limit Monitor**

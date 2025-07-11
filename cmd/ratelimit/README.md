@@ -6,6 +6,7 @@
     - [Environment Variables](#environment-variables)
     - [Deploying w/ AWS SAM / Cloudformation](#deploying-with-aws-sam--cloudformation)
     - [Deploying w/ Terraform](#deploying-with-terraform)
+3. [Tips: Automating Deployment](#tip-automating-builds--deployment)
 
 ## Overview
 
@@ -80,7 +81,7 @@ This Lambda uses the following environment variables:
 Prior to deploying, please review the resource below to see what AWS SAM / Cloudformation will deploy.  
 
 #### ⚠️ Warning ⚠️
-Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not verified to be production ready by default
+Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not intended to be production ready by default
 
 #### Resources
 
