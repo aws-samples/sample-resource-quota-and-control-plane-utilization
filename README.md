@@ -18,11 +18,21 @@ Use this sample as a starting point, not a drop-in solution. Customize this solu
 
 ---
 
-1. **Rate Limit Monitor**
+### Rate Limit Monitor
 An **event-driven** pipeline that captures control-plane API call rates and publishes RequestPerSecond metric to Cloudwatch in ~60s intervals
+
+Below is an example of an api level RequestPerSecond metric.  This metric is valuable to alarm on since it represent the total usage of an api. 
+
+![api level rps metric](/media/apimetric.png)
+
+Below is an example of invoker level RequestPerSecond metric.  Each invoker will have their own dedicated metric for a given api. 
+
+This metric is useful for a deeper analysis into where your consumption is coming from. 
+
+![invoker level rps metric](/media/invokermetric.png)
   
 
-2. **Resource Quota Utilization** 
+### Resource Quota Utilization
   A scheduled lambda function that computes resource utilization across your account by making various describe calls, retrieving the current quota from Service Quotas and publishing a utilization metric (%) in Cloudwatch. 
 
     This project is aimed to capture utilization metrics for resources that do not have coverage natively. 
@@ -73,7 +83,7 @@ lambda-layer/ # directory for lambda layer
 --------
 
 ### Resource Quota Utilization 
-![Resource Quota Architecture](media/resource-quota-solution.png)
+![Resource Quota Architecture](media/monitoring-solution-Page-6.drawio%20(1).png)
 
 
 ---

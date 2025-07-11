@@ -7,7 +7,7 @@
     - [Deploying w/ Terraform](#deploying-with-terraform)
 3. [Tips: Automating Deployment](#tip-automating-builds--deployment)
 
-![Architecture Diagram](../../media/resource-quota-solution.png)
+![Architecture Diagram](../../media/monitoring-solution-Page-6.drawio%20(1).png)
 
 ## Overview 
 
