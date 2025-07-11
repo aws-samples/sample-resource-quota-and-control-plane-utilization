@@ -16,24 +16,16 @@ type QuotaMetric struct {
 	Name string `json:"name"` // Name of the quota metric (e.g., "networkInterfaces")
 }
 
-// RateLimitAPIs represents an API endpoint to monitor for rate limiting.
-// Used to track API call frequency and throttling behavior.
-type RateLimitAPIs struct {
-	Name string `json:"name"` // Name of the API to track (e.g., "assumeRole")
-}
-
 // ServiceConfig represents configuration for a specific AWS service.
 // Services may have quota metrics, rate limit APIs, or both depending on monitoring needs.
 type ServiceConfig struct {
-	QuotaMetrics  []QuotaMetric   `json:"quotaMetrics,omitempty"`  // Quota metrics to monitor
-	RateLimitAPIs []RateLimitAPIs `json:"rateLimitAPIs,omitempty"` // API endpoints to track for rate limiting
+	QuotaMetrics []QuotaMetric `json:"quotaMetrics,omitempty"` // Quota metrics to monitor
 }
 
 // TopLevelServiceConfig represents the complete configuration structure
 // containing all services and regions to monitor.
 type TopLevelServiceConfig struct {
 	Services map[string]ServiceConfig `json:"services"` // Map of service name to its configuration
-	Regions  []string                 `json:"regions"`  // List of AWS regions to monitor
 }
 
 // LoadConfigFromFile reads and parses a JSON configuration file.
@@ -68,8 +60,6 @@ var (
 	ErrInvalidEBSMetric = fmt.Errorf("invalid EBS quota metric")
 	// ErrInvalidVPCMetric indicates an unsupported VPC quota metric.
 	ErrInvalidVPCMetric = fmt.Errorf("invalid VPC quota metric")
-	// ErrInvalidSTSApi indicates an unsupported STS API for rate limiting.
-	ErrInvalidSTSApi = fmt.Errorf("invalid STS api")
 )
 
 // ValidateEC2QuotaMetrics validates that all EC2 quota metrics are supported.
@@ -140,44 +130,6 @@ func ValidateVPCQuotaMetrics(service ServiceConfig) error {
 			return fmt.Errorf("%w: %s", ErrInvalidVPCMetric, metric.Name)
 		}
 	}
-	return nil
-}
-
-// ValidateSTSRateLimitApis validates that all STS rate limit APIs are supported.
-// Currently supports: assumeRole, assumeRoleWithWebIdentity.
-func ValidateSTSRateLimitApis(service ServiceConfig) error {
-	validRateLimitApis := map[string]struct{}{
-		"assumeRole":                {},
-		"assumeRoleWithWebIdentity": {},
-	}
-
-	for _, metric := range service.RateLimitAPIs {
-		if _, ok := validRateLimitApis[metric.Name]; !ok {
-			return fmt.Errorf("%w: %s", ErrInvalidSTSApi, metric.Name)
-		}
-	}
-	return nil
-}
-
-// ValidateRateLimitConfig validates the rate limit configuration for all services.
-// Returns an error if any service has invalid rate limit API configurations.
-func ValidateRateLimitConfig(cfg TopLevelServiceConfig, logger applogger.Logger) error {
-	if logger == nil {
-		logger = &applogger.NoopLogger{}
-	}
-	for serviceName, serviceCfg := range cfg.Services {
-		switch serviceName {
-		case "sts":
-			logger.Info("validating sts rate limit config")
-			if err := ValidateSTSRateLimitApis(serviceCfg); err != nil {
-				logger.Error("invalid sts rate limit config : %v", err)
-				return err
-			}
-		default:
-			logger.Warn("no rate limit config for service %s", serviceName)
-		}
-	}
-	logger.Info("rate limit config validated")
 	return nil
 }
 

@@ -134,6 +134,7 @@ resource "aws_lambda_function" "resource_quota" {
       LOG_LEVEL             = var.log_level
       S3_BUCKET             = var.s3_bucket_name
       HOME_REGION           = var.home_region
+      REGIONS               = join(",", var.regions)
     }
   }
 }
@@ -157,6 +158,42 @@ resource "aws_lambda_permission" "allow_event" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.every_5m.arn
 }
+
+#############################
+# Error Metric & Alarm      #
+#############################
+
+# 1) Metric filter on the Lambda’s native log group 
+resource "aws_cloudwatch_log_metric_filter" "resource_quota_error" {
+  name           = "ResourceQuota-ErrorFilter"
+  log_group_name = "/aws/lambda/${aws_lambda_function.resource_quota.function_name}"
+  pattern        = "\"ERROR\""
+
+  metric_transformation {
+    name      = "ErrorCount"
+    namespace = var.metric_namespace
+    value     = "1"
+  }
+}
+
+# 2) Alarm on the ErrorCount metric
+resource "aws_cloudwatch_metric_alarm" "resource_quota_error_alarm" {
+  alarm_name          = "ResourceQuota-Error-Alarm"
+  alarm_description   = "Fires if the ResourceQuota Lambda emits any ERROR logs"
+  namespace           = var.metric_namespace
+  metric_name         = aws_cloudwatch_log_metric_filter.resource_quota_error.metric_transformation[0].name
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    LogGroupName = "/aws/lambda/${aws_lambda_function.resource_quota.function_name}"
+  }
+}
+
 
 ################################
 # 5) Output the function ARN  #

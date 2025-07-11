@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -37,6 +38,7 @@ const (
 	cloudwatchLogGroupEnv = "CLOUDWATCH_LOG_GROUP"
 	metricNamespaceEnv    = "METRIC_NAMESPACE"
 	s3BucketNameEnv       = "S3_BUCKET"
+	regionsEnv            = "REGIONS"
 	homeRegionEnv         = "HOME_REGION"
 
 	// Known service variables
@@ -109,7 +111,7 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 			Cause:   fmt.Errorf("cloudwatch log group is not set"),
 		})
 	}
-	log.Info("loaded cloudwatch log group env var: %s", cloudwatchLogGroup)
+	log.Info("loaded cloudwatch log group env var=%s", cloudwatchLogGroup)
 
 	namespace := os.Getenv(metricNamespaceEnv)
 	if namespace == "" {
@@ -119,7 +121,7 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 			Cause:   fmt.Errorf("metric namespace is not set"),
 		})
 	}
-	log.Info("loaded metric namespace env var: %s", namespace)
+	log.Info("loaded metric namespace env var=%s", namespace)
 
 	s3BucketName := os.Getenv(s3BucketNameEnv)
 	if s3BucketName == "" {
@@ -129,6 +131,32 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 			Cause:   fmt.Errorf("s3 bucket name is not set"),
 		})
 	}
+	log.Info("loaded s3 bucketname env var=%s", s3BucketName)
+
+	rawRegions := os.Getenv(regionsEnv)
+	if rawRegions == "" {
+		fatal(FatalInput{
+			Logger:  log,
+			ErrType: ErrCannotLoadEnvVar,
+			Cause:   fmt.Errorf("regions is not set"),
+		})
+	}
+	splitRegions := strings.Split(rawRegions, ",")
+	var validateRegions []string
+	for _, r := range splitRegions {
+		if s := strings.TrimSpace((r)); s != "" {
+			validatedRegion, err := utils.ParseAwsRegion(s)
+			if err != nil {
+				fatal(FatalInput{
+					Logger:  log,
+					ErrType: ErrCannotLoadEnvVar,
+					Cause:   fmt.Errorf("invalid region=%s", validatedRegion),
+				})
+			}
+			validateRegions = append(validateRegions, validatedRegion.String())
+		}
+	}
+	log.Info("loaded regions env variable=%s", validateRegions)
 
 	rawHomeRegion := os.Getenv(homeRegionEnv)
 	if rawHomeRegion == "" {
@@ -143,7 +171,7 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 		fatal(FatalInput{
 			Logger:  log,
 			ErrType: ErrCannotLoadEnvVar,
-			Cause:   fmt.Errorf("home region is not a valid AWS region"),
+			Cause:   fmt.Errorf("invalid region=%s", validatedHomeRegion),
 		})
 	}
 
@@ -166,13 +194,11 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 	}
 	log.Info("initialized client factory")
 
-	regions := svcCfg.Regions
-
 	// Ensure CloudWatch log group and streams exist in all regions
 	cloudWatchLogStream := utils.MakeStreamName()
 	ensureLogGroup(EnsureLogGroupInput{
 		Ctx:                 ctx,
-		Regions:             regions,
+		Regions:             validateRegions,
 		CloudwatchLogGroup:  cloudwatchLogGroup,
 		CloudwatchLogStream: cloudWatchLogStream,
 		ClientFactory:       clientFactory,
@@ -185,7 +211,7 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 	regionalBatchers := initMetricBatchers(InitMetricBatchersInput{
 		Ctx:           ctx,
 		ClientFactory: clientFactory,
-		Regions:       regions,
+		Regions:       validateRegions,
 		LogGroup:      cloudwatchLogGroup,
 		LogStream:     cloudWatchLogStream,
 		Namespace:     namespace,
@@ -212,7 +238,7 @@ func HandleRequest(ctx context.Context, event events.CloudWatchEvent) (LambdaRes
 		Ctx:           ctx,
 		ClientFactory: clientFactory,
 		store:         nauStore,
-		Regions:       regions,
+		Regions:       validateRegions,
 		BatcherMap:    regionalBatchers,
 		Services:      svcCfg.Services,
 		Logger:        log,

@@ -18,10 +18,22 @@ The Rate Limit Monitoring solution:
 
 ![Architecture Diagram](../../media/monitoring-solution-Page-8.drawio.png)
 
-## ⚠️ DISCLAIMER ⚠️
-This solution will begin to track events that match the event pattern and populate cloudwatch metrics once deployed.  Please be sure to be aware of any associated costs with deploying and running within your account. 
-
 ## Deployment Guide
+
+---
+
+#### ⚠️ Disclaimer ⚠️
+This repository is provided as a functional example to demonstrate how you might capture control-plane events, buffer them through SQS, and emit EMF metrics via Lambda. It is not intended to represent a production-ready "drop in" solution. Before using in any live environment, you should:
+
+- Review and adjust IAM permissions to follow the principle of least privilege
+- Review encryption at rest and in transit for all resources (SQS, Lambda, logs, etc.)
+- Configure VPC, subnet, and security group settings according to your network requirements
+- Implement proper monitoring, alerting, and log retention lifecycles
+- Be aware of any costs associated with deploying in your account(s)
+
+Use this sample as a starting point, not a drop-in solution. Customize this solution based on your organization’s security, reliability, and operational requirements.
+
+---
 
 This project can be deployed via [CloudFormation / AWS SAM](#deploying-with-cloudformation--aws-sam) or [Terraform](#deploying-with-terraform).  
 
@@ -70,6 +82,8 @@ Prior to deploying, please review the resource below to see what AWS SAM / Cloud
 #### ⚠️ Warning ⚠️
 Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not verified to be production ready by default
 
+#### Resources
+
 | Logical ID                             | Type                             | Description                                                       | Key Properties                                                                                                                                                                                  |
 |----------------------------------------|----------------------------------|-------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **AssumeRoleQueue**                    | AWS::SQS::Queue                  | FIFO queue to buffer AssumeRole events                            | QueueName: assume-role-queue.fifo<br>FifoQueue: true<br>ContentBasedDeduplication: true<br>VisibilityTimeout: 30                                                                                 |
@@ -96,7 +110,7 @@ Please make changes to the template based on your specific environment / securit
 
 #### Parameters
 
-| Parameter             | Description                                           | Default                 | Type    |
+| Parameter Name           | Description                                           | Default                 | Type    |
 |-----------------------|-------------------------------------------------------|-------------------------|---------|
 | ExtensionBucket       | S3 bucket for EMF-extension ZIP                      | `custom-monitoring-poc` | String  |
 | Regions               | Comma-separated AWS regions                           | `us-east-1`             | String  |
@@ -124,7 +138,7 @@ We provide a file, [Makefile.extension](../../Makefile.extension), that simplifi
    make -f Makefile.extension upload BUKCET=<your-bucket-name> #will build, package and send .zip artifact to s3
    ```  
 
-3. **Build & deploy with AWS SAM**  
+3. **Build & deploy with AWS SAM / Cloudformation**  
    ```bash
    sam build
    sam deploy --guided
@@ -139,7 +153,7 @@ Prior to deploying, please review the resource below to see what Terraform will 
 #### ⚠️ Warning ⚠️
 Please make changes to the template based on your specific environment / security requirements.  This is a functional sample but is not verified to be production ready by default
  
-
+#### Resources 
 | Resource                                      | Type                                 | Description                                                       | Key Properties                                                                                                                                             |
 |-----------------------------------------------|--------------------------------------|-------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **aws_sqs_queue.assume_role_queue**           | `aws_sqs_queue`                      | FIFO queue for AssumeRole events                                  | `name = "assume-role-queue.fifo"`<br>`fifo_queue = true`<br>`content_based_deduplication = true`<br>`visibility_timeout_seconds = 30`                         |
@@ -168,8 +182,6 @@ Please make changes to the template based on your specific environment / securit
 | **aws_cloudwatch_metric_alarm.assume_role_webidentity_rps** | `aws_cloudwatch_metric_alarm` | Alarm on per-second rate for WebIdentity                         | –                                                                                                                                                          |
 
 ---
-
-### Deploying with Terraform
 
 #### Variables
 
@@ -202,14 +214,14 @@ We provide a file, [Makefile.extension](../../Makefile.extension), that simplifi
    make -f Makefile.extension upload BUKCET=<your-bucket-name> # will build, package and send .zip artifact to s3
    ```  
 
-3. **Build the RateLimit Lambda**
+3. **Build the RateLimit Lambda Function**
 
 We provide a dedicated Makefile (`Makefile.ratelimit`) to compile & package the RateLimit function.  Terraform is configured use this directory to pull the artifact and deploy to AWS:
 
 > NOTE: If you wish to push the artifact to S3 or another location instead, please ensure you edit the infra/terraform/main.tf file accordinly to reflect these changes
 
 
-```bash 
+```bash
 # Compile and package the RateLimit lambda binary into dist/ratelimit/ratelimit.zip
 make -f Makefile.ratelimit all
 
@@ -223,23 +235,27 @@ dist/
     └── ratelimit.zip     ← zip containing only the executable
 ```
 
-4. **Initialize and apply Terraform**  
-   ```bash
-   cd infra/terraform/ratelimit
-   terraform init
-   terraform validate #optional
-   terraform plan \
-     -var="extension_bucket=<your-bucket>" \
-     -var="extension_s3_key=emf/emf-extension.zip" \
-     -var="regions=[\"us-east-1\"]" \
-     -var="log_level=debug" \
-     -var="cloudwatch_log_group=/lambda/ratelimit/emf" \
-     -var="metric_namespace=\"Rate Limit\"" \
-     -var="propagate_iam_principal=false"
-   terraform apply -auto-approve \
-     -var="extension_bucket=<your-bucket>" \
-     -var="extension_s3_key=emf/emf-extension.zip"
-   ```
+4. **Initialize and apply Terraform plan**  
+```bash
+   # Initialize Terraform
+terraform init
+
+# Create an execution plan and save it to tfplan
+terraform plan -out=tfplan \
+  -var='regions=["us-east-1","us-west-2"]' \
+  -var='log_level="info"' \
+  -var='cloudwatch_log_group="/lambda/ratelimit/emf"' \
+  -var='metric_namespace="Rate Limit"' \
+  -var='propagate_invoker=true' \
+  -var='extension_bucket="my-extension-bucket"' \
+  -var='extension_s3_key="emf/emf-extension.zip"'
+
+# Inspect the plan
+terraform show tfplan
+
+# Apply the saved plan
+terraform apply -auto-approve tfplan
+```
 
 ---
 

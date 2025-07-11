@@ -33,3 +33,9 @@ variable "home_region" {
   type        = string
   default     = "us-east-1"
 }
+
+variable "regions" { 
+  description = "list of regions you want to generate metrics for"
+  type        = list(string)
+  default     = ["us-east-1"]
+}

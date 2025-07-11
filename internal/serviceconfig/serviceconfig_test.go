@@ -126,18 +126,6 @@ func TestValidateFunctions(t *testing.T) {
 			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "wrong"}}},
 			wantError: true,
 		},
-		{
-			name:      "valid STS",
-			validate:  ValidateSTSRateLimitApis,
-			input:     ServiceConfig{RateLimitAPIs: []RateLimitAPIs{{Name: "assumeRole"}}},
-			wantError: false,
-		},
-		{
-			name:      "invalid STS",
-			validate:  ValidateSTSRateLimitApis,
-			input:     ServiceConfig{RateLimitAPIs: []RateLimitAPIs{{Name: "wrong"}}},
-			wantError: true,
-		},
 	}
 
 	for _, tt := range tests {
@@ -148,44 +136,6 @@ func TestValidateFunctions(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestValidateRateLimitConfig(t *testing.T) {
-	t.Run("valid STS", func(t *testing.T) {
-		cfg := TopLevelServiceConfig{
-			Services: map[string]ServiceConfig{
-				"sts": {RateLimitAPIs: []RateLimitAPIs{{Name: "assumeRole"}}},
-			},
-		}
-		err := ValidateRateLimitConfig(cfg, nil)
-		if err != nil {
-			t.Errorf("expected no error, got %v", err)
-		}
-	})
-
-	t.Run("invalid STS", func(t *testing.T) {
-		cfg := TopLevelServiceConfig{
-			Services: map[string]ServiceConfig{
-				"sts": {RateLimitAPIs: []RateLimitAPIs{{Name: "invalid"}}},
-			},
-		}
-		err := ValidateRateLimitConfig(cfg, nil)
-		if err == nil {
-			t.Errorf("expected error")
-		}
-	})
-
-	t.Run("ignore unknown service", func(t *testing.T) {
-		cfg := TopLevelServiceConfig{
-			Services: map[string]ServiceConfig{
-				"unknown": {},
-			},
-		}
-		err := ValidateRateLimitConfig(cfg, nil)
-		if err != nil {
-			t.Errorf("expected no error for unknown service")
-		}
-	})
 }
 
 func TestValidateQuotaMetricConfig(t *testing.T) {

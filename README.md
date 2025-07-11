@@ -1,17 +1,12 @@
 # Rate Limit & Resource Quota Monitoring Solution
 
-
-## Solution Overview
-
+## Solution(s) Overview
 
 This repository contains two complementary, serverless Go projects following AWS best practices for EMF-based metrics:
 
-
-1. **Rate Limit Monitor** 
-  An **event-driven** pipeline that captures control-plane API call rates and publishes CallCount metric to Cloudwatch in real-time.
+1. **Rate Limit Monitor**
+An **event-driven** pipeline that captures control-plane API call rates and publishes RequestPerSecond metric to Cloudwatch in ~60s intervals
   
-    Pattern: EventBridge → SQS FIFO (single queue, per-rule message groups) → Lambda (batch of 10) → EMF in CloudWatch Logs (in batches).
-
 
 2. **Resource Quota Utilization** 
   A scheduled lambda function that computes resource utilization across your account by making various describe calls, retrieving the current quota from Service Quotas and publishing a utilization metric (%) in Cloudwatch. 
@@ -21,7 +16,7 @@ This repository contains two complementary, serverless Go projects following AWS
     As of now we have support for the following metrics, with plans to continuously add more based on customer feedback: 
   
     - total networker interface per region
-    - VPC Nau (network address units)
+    - VPC Nau (Network Address Units)
     - total g3Storage 
     - total oidc providers
     - total EKS Clusters
@@ -38,11 +33,19 @@ cmd / # entry point location for each project
             main.go 
     resourcequota/      # resource quota solution
             main.go 
-infra / # folder for cloudformation templates 
-      ratelimit/        # rate limit solution
-              template.yaml 
-      resourcequota     # resource quota solution
-              template.yaml 
+infra /                 # folder for deploying via cloudformation and terraform 
+        /cloudormation 
+                /ratelimit
+                        template.yaml
+                /resourcequota
+                        template.yaml
+        /terraform 
+                /ratelimit
+                        main.tf
+                        variables.tf
+                /resourcequota
+                        main.tf
+                        variables.tf
 internal/   # folder for internal libraries useds
 lambda-layer/ # directory for lambda layer
 ```
@@ -51,7 +54,7 @@ lambda-layer/ # directory for lambda layer
 
 
 ### Rate Limit Monitor 
-![Rate Limit Architecture](media/rate-limit-solution.png)
+![Rate Limit Architecture](media/monitoring-solution-Page-8.drawio.png)
 
 --------
 

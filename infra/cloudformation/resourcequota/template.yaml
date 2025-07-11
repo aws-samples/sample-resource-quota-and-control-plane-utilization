@@ -19,7 +19,7 @@ Parameters:
     Description: Metric Namespace for various resource quota utilization metrics
   LogLevel:
     Type: String
-    Default: debug
+    Default: info
     Description: Log level for Lambda function logging
   LambdaLayerPath:
     Type: String
@@ -33,6 +33,10 @@ Parameters:
     Type: String
     Default: us-east-1
     Description: Home AWS Region for the resource quota utilization manifest file
+  Regions:
+    Type: String
+    Default: us-east-1
+    Description: Regions you want to generate metrics for
 
 
 Resources:
@@ -128,14 +132,56 @@ Resources:
           LOG_LEVEL: !Ref LogLevel 
           S3_BUCKET: !Ref S3BucketName
           HOME_REGION: !Ref HomeRegion
+          REGIONS: !Ref Regions
       Events:
         EveryFiveMinutes:
           Type: Schedule
           Properties:
             Schedule: rate(5 minutes)
             Enabled: true
+  
+  ResourceQuotaErrorFilter:
+    Type: AWS::Logs::MetricFilter
+    DependsOn: ResourceQuotaFunction
+    Properties:
+      FilterPattern: '"ERROR"'
+      LogGroupName: !Sub "/aws/lambda/${ResourceQuotaFunction}"
+      MetricTransformations:
+        - MetricName: "Error Count"
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: "1"
+
+  ResourceQuotaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: "ResourceQuota-Error-Alarm"
+      AlarmDescription: "Alarm when the ResourceQuotaLambda emits any erorr logs"
+      Namespace: !Ref MetricNamespace
+      MetricName: "Error Count"
+      Dimensions:
+        - Name: LogGroupName
+          Value: !Sub "/aws/lambda/${ResourceQuotaFunction}"
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
       
 Outputs:
+  LambdaExecutionRoleArn:
+    Description: "ARN of the IAM role assumed by the ResourceQuota Lambda"
+    Value: !GetAtt LambdaExecutionRole.Arn
+
+  ConfigFileLambdaLayerVersionArn:
+    Description: "ARN of the configuration Lambda Layer version"
+    Value: !Ref ConfigFileLambdaLayer
+
   ResourceQuotaFunctionArn:
     Description: "ARN of the ResourceQuota Lambda function"
     Value: !GetAtt ResourceQuotaFunction.Arn
+
+  ResourceQuotaErrorAlarmName:
+    Description: "Name of the CloudWatch Alarm for Lambda ERROR logs"
+    Value: !Ref ResourceQuotaErrorAlarm
+
