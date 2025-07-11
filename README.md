@@ -4,6 +4,19 @@
 
 This repository contains two complementary, serverless Go projects following AWS best practices for EMF-based metrics:
 
+---
+#### ⚠️ Disclaimer ⚠️
+This repository is provided as a functional example. It is not intended to represent a production-ready "drop in" solution. Before using in any live environment, you should:
+
+- Review and adjust IAM permissions to follow the principle of least privilege
+- Review encryption at rest and in transit for all resources (SQS, Lambda, logs, etc.)
+- Configure VPC, subnet, and security group settings according to your network requirements
+- Implement proper monitoring, alerting, and log retention lifecycles
+- Be aware of any costs associated with deploying in your account(s)
+
+Use this sample as a starting point, not a drop-in solution. Customize this solution based on your organization’s security, reliability, and operational requirements.
+---
+
 1. **Rate Limit Monitor**
 An **event-driven** pipeline that captures control-plane API call rates and publishes RequestPerSecond metric to Cloudwatch in ~60s intervals
   
