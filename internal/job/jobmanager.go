@@ -64,6 +64,13 @@ type jobWithRetry struct {
 	attempt int
 }
 
+// metricsDispatchJob represents metrics to be dispatched by the dedicated metrics worker.
+type metricsDispatchJob struct {
+	metrics  []types.CloudWatchMetric
+	region   string
+	workerID int
+}
+
 // jobManager implements JobManager interface with concurrent job execution, worker pools and timeout management.
 // It dispatches metrics to region-specific channels and handles graceful shutdown.
 type jobManager struct {
@@ -73,11 +80,13 @@ type jobManager struct {
 	jobTimeout     time.Duration                    // Timeout for individual job execution
 	jobCh          chan *jobWithRetry               // Buffered channel for primary job queue
 	retryCh        chan *jobWithRetry               // Buffered channel for retry job queue
+	metricsCh      chan metricsDispatchJob          // Buffered channel for metrics dispatching
 	batcherMap     safestore.Store[metrics.Batcher] // Region-specific metric channels
 	workers        int                              // Number of worker goroutines
 	maxRetries     int                              // Maximum retry attempts per job
 	log            logger.Logger                    // Logger instance
 	shutdownWg     sync.WaitGroup                   // Synchronization for worker shutdown
+	metricsWg      sync.WaitGroup                   // Synchronization for metrics worker
 	shutdownOnce   sync.Once                        // Ensure shutdown happens once
 }
 
@@ -126,6 +135,7 @@ func NewJobManager(config JobManagerConfig) (JobManager, error) {
 		jobTimeout:     config.JobTimeout,
 		jobCh:          make(chan *jobWithRetry, DefaultBufferSize),
 		retryCh:        make(chan *jobWithRetry, retryBufferSize),
+		metricsCh:      make(chan metricsDispatchJob, DefaultBufferSize),
 		batcherMap:     config.BatcherMap,
 		workers:        workers,
 		maxRetries:     config.MaxRetries,
@@ -136,6 +146,10 @@ func NewJobManager(config JobManagerConfig) (JobManager, error) {
 	if config.ParentCtx.Err() != nil {
 		return nil, ErrContextCancelled
 	}
+
+	// Start dedicated metrics worker
+	jm.metricsWg.Add(1)
+	go jm.metricsWorker()
 
 	jm.log.Info("starting %d workers", workers)
 	jm.shutdownWg.Add(workers)
@@ -148,14 +162,19 @@ func NewJobManager(config JobManagerConfig) (JobManager, error) {
 // AddJob enqueues a job for execution by the worker pool.
 // Returns an error if the job cannot be enqueued (queue full or shutdown in progress).
 func (jm *jobManager) AddJob(job Job) error {
+	// Check shutdown first to ensure deterministic behavior
+	select {
+	case <-jm.shutdownCtx.Done():
+		return ErrJobManagerShutdown
+	default:
+	}
+	
+	// Try to add job
 	jobWrapper := &jobWithRetry{job: job, attempt: 0}
-
 	select {
 	case jm.jobCh <- jobWrapper:
 		jm.log.Debug("enqueued job %s (region=%s)", job.GetJobName(), job.GetRegion())
 		return nil
-	case <-jm.shutdownCtx.Done():
-		return ErrJobManagerShutdown
 	default:
 		return fmt.Errorf("primary job queue full")
 	}
@@ -166,16 +185,24 @@ func (jm *jobManager) AddJob(job Job) error {
 func (jm *jobManager) Wait() {
 	jm.shutdownOnce.Do(func() {
 		jm.log.Info("initiating shutdown")
-		jm.shutdownCancel()
+		close(jm.jobCh)     // Close job channel first
+		jm.shutdownCancel() // Then signal shutdown
 	})
 
 	jm.log.Info("waiting for workers to finish")
 	jm.shutdownWg.Wait()
-	jm.log.Info("all workers exited")
+	
+	jm.log.Info("all workers finished, closing metrics channel")
+	close(jm.metricsCh)
+	
+	jm.log.Info("waiting for metrics worker to finish")
+	jm.metricsWg.Wait()
+	
+	jm.log.Info("shutdown complete")
 }
 
 // worker runs in a goroutine and processes jobs from both channels.
-// Workers continue processing until shutdown is signaled AND both queues are empty.
+// Workers drain remaining jobs when shutdown is signaled.
 func (jm *jobManager) worker(id int) {
 	defer jm.shutdownWg.Done()
 	jm.log.Info("worker-%d started", id)
@@ -185,28 +212,59 @@ func (jm *jobManager) worker(id int) {
 		case jobWrapper, ok := <-jm.jobCh:
 			if ok {
 				jm.executeJob(jobWrapper, id)
-				continue
+			} else {
+				return // Primary channel closed
 			}
-			// Primary channel closed, continue with retry queue only
 		case retryJob, ok := <-jm.retryCh:
 			if ok {
 				jm.executeJob(retryJob, id)
-				continue
+			} else {
+				return // Retry channel closed
 			}
-			// Retry channel closed, exit
-			return
 		case <-jm.shutdownCtx.Done():
-			// Shutdown signaled, check if queues are empty
-			if len(jm.jobCh) == 0 && len(jm.retryCh) == 0 {
-				jm.log.Info("worker-%d shutting down (queues empty)", id)
-				return
+			// Shutdown signaled, drain remaining jobs
+			jm.drainRemainingJobs(id)
+			return
+		}
+	}
+}
+
+// drainRemainingJobs processes any remaining jobs in the queues during shutdown.
+func (jm *jobManager) drainRemainingJobs(workerID int) {
+	jm.log.Info("worker-%d draining remaining jobs during shutdown", workerID)
+	
+	// Drain primary queue
+	for {
+		select {
+		case jobWrapper, ok := <-jm.jobCh:
+			if ok {
+				jm.executeJob(jobWrapper, workerID)
+			} else {
+				goto drainRetry // Channel closed
 			}
-			// Continue processing remaining jobs
+		default:
+			goto drainRetry // No more jobs
+		}
+	}
+	
+drainRetry:
+	// Drain retry queue
+	for {
+		select {
+		case retryJob, ok := <-jm.retryCh:
+			if ok {
+				jm.executeJob(retryJob, workerID)
+			} else {
+				return // Channel closed
+			}
+		default:
+			return // No more jobs
 		}
 	}
 }
 
 // executeJob executes a single job with proper timeout and cleanup.
+// Workers own the complete job lifecycle including sending metrics to the metrics channel.
 func (jm *jobManager) executeJob(jobWrapper *jobWithRetry, workerID int) {
 	job := jobWrapper.job
 	jm.log.Info("worker-%d executing job %s (attempt %d)", workerID, job.GetJobName(), jobWrapper.attempt+1)
@@ -221,17 +279,41 @@ func (jm *jobManager) executeJob(jobWrapper *jobWithRetry, workerID int) {
 	}
 
 	jm.log.Info("worker-%d job %s returned %d metrics", workerID, job.GetJobName(), len(metrics))
-	jm.dispatchMetrics(metrics, job, workerID)
+	
+	// Worker directly sends metrics to channel (always send for completed jobs)
+	if len(metrics) > 0 {
+		metricsJob := metricsDispatchJob{
+			metrics:  metrics,
+			region:   job.GetRegion(),
+			workerID: workerID,
+		}
+		
+		jm.metricsCh <- metricsJob
+		jm.log.Debug("worker-%d sent %d metrics to channel", workerID, len(metrics))
+	}
+	// Worker job is now completely done
 }
 
-// dispatchMetrics handles dispatching all metrics from a job to their respective batchers.
-func (jm *jobManager) dispatchMetrics(metrics []types.CloudWatchMetric, job Job, workerID int) {
-	for _, m := range metrics {
+// metricsWorker runs as a dedicated goroutine to process metrics from the metrics channel.
+func (jm *jobManager) metricsWorker() {
+	defer jm.metricsWg.Done()
+	jm.log.Info("metrics worker started")
+
+	for metricsJob := range jm.metricsCh {
+		jm.processMetricsJob(metricsJob)
+	}
+
+	jm.log.Info("metrics worker finished")
+}
+
+// processMetricsJob processes a batch of metrics from a completed job.
+func (jm *jobManager) processMetricsJob(metricsJob metricsDispatchJob) {
+	for _, metric := range metricsJob.metrics {
 		if jm.parentCtx.Err() != nil {
-			jm.log.Info("worker-%d interrupted before dispatching all metrics", workerID)
+			jm.log.Info("metrics worker interrupted, parent context cancelled")
 			return
 		}
-		jm.dispatchSingleMetric(m, job.GetRegion(), workerID)
+		jm.dispatchSingleMetric(metric, metricsJob.region, metricsJob.workerID)
 	}
 }
 

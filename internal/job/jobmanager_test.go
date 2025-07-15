@@ -11,7 +11,7 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/batch/metrics"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/outofoffice3/aws-samples/geras/internal/safestore"
-	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,16 +20,38 @@ import (
 type controllableJob struct {
 	region            string
 	name              string
-	metrics           []sharedtypes.CloudWatchMetric
+	metrics           []types.CloudWatchMetric
 	err               error
 	delay             time.Duration
 	panicOnExec       bool
 	callCount         int
 	failuresRemaining int
 	mu                sync.Mutex
+
+	// Synchronization fields for deterministic testing
+	startSignal    chan struct{}
+	completeSignal chan struct{}
+	blockUntil     chan struct{}
 }
 
-func (c *controllableJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
+func (c *controllableJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
+	// Signal job start if channel exists
+	if c.startSignal != nil {
+		select {
+		case c.startSignal <- struct{}{}:
+		default:
+		}
+	}
+
+	// Block if blockUntil channel exists and is not closed
+	if c.blockUntil != nil {
+		select {
+		case <-c.blockUntil:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
 	c.mu.Lock()
 	c.callCount++
 	if c.failuresRemaining > 0 {
@@ -51,6 +73,14 @@ func (c *controllableJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatch
 		}
 	}
 
+	// Signal job completion if channel exists
+	if c.completeSignal != nil {
+		select {
+		case c.completeSignal <- struct{}{}:
+		default:
+		}
+	}
+
 	return c.metrics, c.err
 }
 
@@ -64,12 +94,12 @@ func (c *controllableJob) GetCallCount() int {
 
 // trackingBatcher records all Add calls with timestamps.
 type trackingBatcher struct {
-	adds      []sharedtypes.CloudWatchMetric
+	adds      []types.CloudWatchMetric
 	callTimes []time.Time
 	mu        sync.Mutex
 }
 
-func (t *trackingBatcher) Add(ctx context.Context, m sharedtypes.CloudWatchMetric) {
+func (t *trackingBatcher) Add(ctx context.Context, m types.CloudWatchMetric) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.adds = append(t.adds, m)
@@ -78,10 +108,10 @@ func (t *trackingBatcher) Add(ctx context.Context, m sharedtypes.CloudWatchMetri
 
 func (t *trackingBatcher) FlushAll(ctx context.Context) {}
 
-func (t *trackingBatcher) GetAdds() []sharedtypes.CloudWatchMetric {
+func (t *trackingBatcher) GetAdds() []types.CloudWatchMetric {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return append([]sharedtypes.CloudWatchMetric(nil), t.adds...)
+	return append([]types.CloudWatchMetric(nil), t.adds...)
 }
 
 func (t *trackingBatcher) GetCallCount() int {
@@ -90,11 +120,20 @@ func (t *trackingBatcher) GetCallCount() int {
 	return len(t.adds)
 }
 
+// Test timing constants
+const (
+	FastJobTime    = 10 * time.Millisecond  // Fast job execution
+	SlowJobTime    = 100 * time.Millisecond // Slow job execution
+	DispatchTime   = 5 * time.Millisecond   // Metric dispatch time
+	SystemBuffer   = 20 * time.Millisecond  // System variance buffer
+	ShutdownBuffer = 50 * time.Millisecond  // Shutdown coordination buffer
+)
+
 // Test helper functions
-func createTestMetrics(count int, withVPC bool) []sharedtypes.CloudWatchMetric {
-	metrics := make([]sharedtypes.CloudWatchMetric, count)
+func createTestMetrics(count int, withVPC bool) []types.CloudWatchMetric {
+	metrics := make([]types.CloudWatchMetric, count)
 	for i := 0; i < count; i++ {
-		metric := sharedtypes.CloudWatchMetric{
+		metric := types.CloudWatchMetric{
 			Name:     fmt.Sprintf("metric-%d", i),
 			Value:    float64(i * 10),
 			Metadata: make(map[string]string),
@@ -105,6 +144,40 @@ func createTestMetrics(count int, withVPC bool) []sharedtypes.CloudWatchMetric {
 		metrics[i] = metric
 	}
 	return metrics
+}
+
+// Job creation helpers
+func createFastJob(metricCount int) *controllableJob {
+	return &controllableJob{
+		region:  "test-region",
+		name:    "fast-job",
+		metrics: createTestMetrics(metricCount, false),
+		delay:   FastJobTime,
+	}
+}
+
+func createSlowJob(metricCount int) *controllableJob {
+	return &controllableJob{
+		region:  "test-region",
+		name:    "slow-job",
+		metrics: createTestMetrics(metricCount, false),
+		delay:   SlowJobTime,
+	}
+}
+
+func createBlockedJob(metricCount int) *controllableJob {
+	return &controllableJob{
+		region:     "test-region",
+		name:       "blocked-job",
+		metrics:    createTestMetrics(metricCount, false),
+		blockUntil: make(chan struct{}),
+	}
+}
+
+// Timing calculation helpers
+func calculateJobCompletionTime(jobDelay time.Duration, numMetrics int) time.Duration {
+	dispatchTime := time.Duration(numMetrics) * (DispatchTime / 2) // Estimate
+	return jobDelay + dispatchTime + SystemBuffer
 }
 
 func setupTestJobManager(t *testing.T, config JobManagerConfig) (JobManager, *trackingBatcher) {
@@ -220,7 +293,7 @@ func TestAddJobQueueFull(t *testing.T) {
 	ctx := context.Background()
 	jm, _ := setupTestJobManager(t, JobManagerConfig{
 		ParentCtx:  ctx,
-		Workers:    1,               // Single worker
+		Workers:    1,                // Single worker
 		JobTimeout: 10 * time.Second, // Long timeout
 	})
 	defer jm.Wait()
@@ -286,7 +359,7 @@ func TestJobExecution(t *testing.T) {
 			job: &controllableJob{
 				region:  "test-region",
 				name:    "empty-job",
-				metrics: []sharedtypes.CloudWatchMetric{},
+				metrics: []types.CloudWatchMetric{},
 			},
 			expectMetrics: 0,
 		},
@@ -380,7 +453,7 @@ func TestRetryLogic(t *testing.T) {
 func TestMetricDispatching(t *testing.T) {
 	tests := []struct {
 		name             string
-		metrics          []sharedtypes.CloudWatchMetric
+		metrics          []types.CloudWatchMetric
 		region           string
 		expectDispatched int
 	}{
@@ -427,7 +500,7 @@ func TestMetricDispatching(t *testing.T) {
 
 func TestContextCancellation(t *testing.T) {
 	tests := []struct {
-		name       string
+		name        string
 		cancelDelay time.Duration
 		jobDelay    time.Duration
 	}{
@@ -482,8 +555,8 @@ func TestContextCancellation(t *testing.T) {
 func TestGetQueueStats(t *testing.T) {
 	ctx := context.Background()
 	jm, _ := setupTestJobManager(t, JobManagerConfig{
-		ParentCtx: ctx,
-		Workers:   1,
+		ParentCtx:  ctx,
+		Workers:    1,
 		JobTimeout: 5 * time.Second, // Long timeout to prevent job timeout
 	})
 	defer jm.Wait()
@@ -550,10 +623,10 @@ func TestConcurrentOperations(t *testing.T) {
 
 	// Wait for all jobs to be added
 	addWg.Wait()
-	
+
 	// Wait for all jobs to be processed
 	jm.Wait()
-	
+
 	// Give a small buffer for final metric dispatching
 	time.Sleep(10 * time.Millisecond)
 
