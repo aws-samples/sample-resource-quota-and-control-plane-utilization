@@ -8,9 +8,10 @@ import (
 
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/builder"
-	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
+	"github.com/outofoffice3/aws-samples/geras/internal/safestore"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // getCallCount uses reflection to read the private callPutLogEventsCount
@@ -22,25 +23,28 @@ func getCallCount(f *cwlclient.FakeCloudWatchLogsClient) int {
 func TestEMFFlusher_FlushScenarios(t *testing.T) {
 	ctx := context.Background()
 	lg, ls := "lg", "ls"
-	clientMap := safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
+	clientMap := safestore.NewSyncStore[cwlclient.CloudWatchLogsClient]()
 	// 1) Empty batch: no calls
 	fake1 := &cwlclient.FakeCloudWatchLogsClient{Region: "r1"}
 	clientMap.Store("r1", fake1)
-	fl1 := NewEMFFlusher(EMFFlusherConfig{CwlClientMap: &clientMap, LogGroupName: lg, LogStreamName: ls, Logger: &logger.NoopLogger{}})
-	err := fl1.Flush(ctx, "r1", []builder.EMFRecord{})
+	fl1, err := NewEMFFlusher(EMFFlusherConfig{CwlClientMap: clientMap, LogGroupName: lg, LogStreamName: ls, Logger: &logger.NoopLogger{}})
+	require.NoError(t, err)
+	err = fl1.Flush(ctx, "r1", []builder.EMFRecord{})
 	assert.NoError(t, err)
 	assert.Equal(t, 0, getCallCount(fake1), "empty batch should not call PutLogEvents")
 
 	// 2) Missing client: returns error
-	fl2 := NewEMFFlusher(EMFFlusherConfig{CwlClientMap: &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}, LogGroupName: lg, LogStreamName: ls, Logger: &logger.NoopLogger{}})
+	fl2, err := NewEMFFlusher(EMFFlusherConfig{CwlClientMap: safestore.NewSyncStore[cwlclient.CloudWatchLogsClient](), LogGroupName: lg, LogStreamName: ls, Logger: &logger.NoopLogger{}})
+	require.NoError(t, err)
 	err = fl2.Flush(ctx, "missing", []builder.EMFRecord{{Payload: []byte("x"), TimeStamp: time.Now()}})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no client for region missing")
+	assert.Contains(t, err.Error(), "client not found for region")
 
 	// 3) Successful flush: increments call count
 	fake3 := &cwlclient.FakeCloudWatchLogsClient{Region: "r3"}
 	clientMap.Store("r3", fake3)
-	fl3 := NewEMFFlusher(EMFFlusherConfig{CwlClientMap: &clientMap, LogGroupName: lg, LogStreamName: ls, Logger: &logger.NoopLogger{}})
+	fl3, err := NewEMFFlusher(EMFFlusherConfig{CwlClientMap: clientMap, LogGroupName: lg, LogStreamName: ls, Logger: &logger.NoopLogger{}})
+	require.NoError(t, err)
 	recOld := builder.EMFRecord{Payload: []byte("old"), TimeStamp: time.Now().Add(-time.Second)}
 	recNew := builder.EMFRecord{Payload: []byte("new"), TimeStamp: time.Now()}
 	err = fl3.Flush(ctx, "r3", []builder.EMFRecord{recNew, recOld})
@@ -50,7 +54,8 @@ func TestEMFFlusher_FlushScenarios(t *testing.T) {
 	// 4) Client error propagates
 	fake4 := &cwlclient.FakeCloudWatchLogsClient{Region: "r4", ErrPutLogEvents: true}
 	clientMap.Store("r4", fake4)
-	fl4 := NewEMFFlusher(EMFFlusherConfig{CwlClientMap: &clientMap, LogGroupName: lg, LogStreamName: ls, Logger: &logger.NoopLogger{}})
+	fl4, err := NewEMFFlusher(EMFFlusherConfig{CwlClientMap: clientMap, LogGroupName: lg, LogStreamName: ls, Logger: &logger.NoopLogger{}})
+	require.NoError(t, err)
 	err = fl4.Flush(ctx, "r4", []builder.EMFRecord{{Payload: []byte("p"), TimeStamp: time.Now()}})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "PutLogEvents injected error")
@@ -100,6 +105,6 @@ func TestMakeFlushFuncScenarios(t *testing.T) {
 	fake.Reset()
 	err = flushFn(ctx, recs)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "emf flusher: PutLogEvents injected error")
+	assert.Contains(t, err.Error(), "failed to flush batch to CloudWatch Logs")
 	assert.Equal(t, 1, getCallCount(fake), "call count even on error")
 }

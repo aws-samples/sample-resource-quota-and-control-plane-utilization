@@ -1,0 +1,8 @@
+{
+  "eventVersion": "1.05",
+  "userIdentity": {
+    "type": "IAMUser",
+    "principalId": "AIDACKCEVSQ6C2EXAMPLE"
+    // Missing comma and closing brace
+  "eventTime": "invalid-timestamp",
+  "eventSource": "ec2.amazonaws.com"

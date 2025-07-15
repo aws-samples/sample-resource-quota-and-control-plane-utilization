@@ -8,7 +8,7 @@ import (
 	supportclient "github.com/outofoffice3/aws-samples/geras/internal/awsclients/supportclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 // IamRolesJob will implement the Job interface
@@ -47,7 +47,7 @@ func NewIamRoleJob(config IamRoleJobConfig) (job.Job, error) {
 }
 
 // Collect will return the total number of IAM roles in a given region
-func (irc *IamRoleJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
+func (irc *IamRoleJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
 	output, err := irc.supportClient.RefreshTrustedAdvisorCheck(ctx, &support.RefreshTrustedAdvisorCheckInput{
 		CheckId: aws.String(IamRoleCheckId),
 	})

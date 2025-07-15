@@ -13,7 +13,7 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 // OIDCProvider will implement the Job interface
@@ -28,9 +28,9 @@ type OIDCProviderJob struct {
 }
 
 type OIDCProviderJobConfig struct {
-	IamClient          iamclient.IamClient
-	ServiceQuotasCliet servicequotaclient.ServiceQuotasClient
-	Logger             logger.Logger
+	IamClient           iamclient.IamClient
+	ServiceQuotasClient servicequotaclient.ServiceQuotasClient
+	Logger              logger.Logger
 }
 
 const (
@@ -47,9 +47,9 @@ func NewOIDCProviderJob(config OIDCProviderJobConfig) (job.Job, error) {
 	}
 	job := &OIDCProviderJob{
 		IamClient:           config.IamClient,
-		ServiceQuotasClient: config.ServiceQuotasCliet,
+		ServiceQuotasClient: config.ServiceQuotasClient,
 		jobName:             oidcProvidersJobPrefix + "-" + config.IamClient.GetRegion(),
-		region:              config.ServiceQuotasCliet.GetRegion(),
+		region:              config.IamClient.GetRegion(),
 		Logger:              config.Logger,
 	}
 
@@ -57,7 +57,7 @@ func NewOIDCProviderJob(config OIDCProviderJobConfig) (job.Job, error) {
 }
 
 // Execute will return the total number of OIDC providers in a given region
-func (j *OIDCProviderJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatchMetric, error) {
+func (j *OIDCProviderJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
 
 	input := &iam.ListOpenIDConnectProvidersInput{}
 	var totalCount int64 = 0
@@ -84,15 +84,15 @@ func (j *OIDCProviderJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatch
 	percent := strconv.FormatFloat(utilization, 'f', -1, 64)
 	j.Logger.Info("%s total=%d, quota=%.2f, utilization=%q%%", j.GetJobName(), totalCount, quotaValue, percent)
 
-	meric := sharedTypes.CloudWatchMetric{
+	metric := types.CloudWatchMetric{
 		Name:      cloudwatchMetricName,
 		Value:     utilization,
-		Unit:      sharedTypes.UnitPercent,
+		Unit:      types.UnitPercent,
 		Metadata:  nil,
 		Timestamp: time.Now(),
 	}
 
-	return []sharedTypes.CloudWatchMetric{meric}, nil
+	return []types.CloudWatchMetric{metric}, nil
 }
 
 // GetJobName will return the job name

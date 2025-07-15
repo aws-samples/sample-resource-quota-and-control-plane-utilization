@@ -5,17 +5,42 @@ package builder
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 const (
 	MetricUnitCount string = "Count"
 )
+
+// Error variables for better error handling and testing
+var (
+	ErrEmptyMetricName = errors.New("metric name cannot be empty")
+	ErrEmptyNamespace  = errors.New("namespace cannot be empty")
+	ErrInvalidUnit     = errors.New("invalid metric unit")
+	ErrMarshalFailed   = errors.New("failed to marshal EMF document")
+	ErrUnmarshalFailed = errors.New("failed to unmarshal CloudTrail event")
+)
+
+// TimeProvider allows for dependency injection of time for testing
+type TimeProvider interface {
+	Now() time.Time
+}
+
+// DefaultTimeProvider uses the system clock
+type DefaultTimeProvider struct{}
+
+func (DefaultTimeProvider) Now() time.Time {
+	return time.Now()
+}
+
+// defaultTimeProvider is the package-level time provider
+var defaultTimeProvider TimeProvider = DefaultTimeProvider{}
 
 // EMFInput contains all parameters needed to build an EMF document including
 // metric name, value, dimensions, and timing information.
@@ -39,9 +64,22 @@ type EMFRecord struct {
 // Build creates a properly formatted EMF JSON document from input parameters,
 // including metric data, dimensions, and CloudWatch metadata structure.
 func Build(input EMFInput, logger logger.Logger) (EMFRecord, error) {
+	return BuildWithTimeProvider(input, logger, defaultTimeProvider)
+}
+
+// BuildWithTimeProvider creates an EMF document with injectable time provider for testing
+func BuildWithTimeProvider(input EMFInput, logger logger.Logger, timeProvider TimeProvider) (EMFRecord, error) {
+	// Validate required fields
+	if strings.TrimSpace(input.MetricName) == "" {
+		return EMFRecord{}, ErrEmptyMetricName
+	}
+	if strings.TrimSpace(input.Namespace) == "" {
+		return EMFRecord{}, ErrEmptyNamespace
+	}
+
 	ts := input.Timestamp
 	if ts.IsZero() {
-		ts = time.Now()
+		ts = timeProvider.Now()
 	}
 
 	// start the document with metric name and value
@@ -53,7 +91,7 @@ func Build(input EMFInput, logger logger.Logger) (EMFRecord, error) {
 	dimNames := make([]string, 0, len(input.Dimensions))
 	cleanDims := make([][]string, 0, len(input.Dimensions))
 	for _, dim := range input.Dimensions {
-		if len(dim) >= 2 {
+		if len(dim) >= 2 && strings.TrimSpace(dim[0]) != "" {
 			name, value := dim[0], dim[1]
 			doc[name] = value
 			dimNames = append(dimNames, name)
@@ -75,7 +113,7 @@ func Build(input EMFInput, logger logger.Logger) (EMFRecord, error) {
 	data, err := json.Marshal(doc)
 	if err != nil {
 		logger.Error("Error marshaling EMF payload: %v", err.Error())
-		return EMFRecord{}, err
+		return EMFRecord{}, ErrMarshalFailed
 	}
 
 	return EMFRecord{
@@ -94,17 +132,29 @@ func ConvertSQSMessageToEMF(
 	dimensions [][]string,
 	applogger logger.Logger,
 ) (EMFRecord, error) {
-	var ctEvent sharedTypes.CloudTrailEvent
+	return ConvertSQSMessageToEMFWithTimeProvider(ctx, msg, namespace, metricName, unit, dimensions, applogger, defaultTimeProvider)
+}
+
+// ConvertSQSMessageToEMFWithTimeProvider allows time provider injection for testing
+func ConvertSQSMessageToEMFWithTimeProvider(
+	ctx context.Context,
+	msg events.SQSMessage,
+	namespace, metricName, unit string,
+	dimensions [][]string,
+	applogger logger.Logger,
+	timeProvider TimeProvider,
+) (EMFRecord, error) {
+	var ctEvent types.CloudTrailEvent
 	if err := json.Unmarshal([]byte(msg.Body), &ctEvent); err != nil {
 		applogger.Error("Error unmarshaling CloudTrail event: %v", err.Error())
-		return EMFRecord{}, err
+		return EMFRecord{}, ErrUnmarshalFailed
 	}
 
 	timestamp := ctEvent.EventTime
 	// normalize unit to Count if needed
 	if !strings.EqualFold(unit, "Count") {
 		applogger.Warn("Unknown metric unit %s, defaulting to Count", unit)
-		unit = "Count"
+		unit = MetricUnitCount
 	}
 
 	in := EMFInput{
@@ -115,5 +165,5 @@ func ConvertSQSMessageToEMF(
 		Dimensions: dimensions,
 		Timestamp:  timestamp,
 	}
-	return Build(in, applogger)
+	return BuildWithTimeProvider(in, applogger, timeProvider)
 }

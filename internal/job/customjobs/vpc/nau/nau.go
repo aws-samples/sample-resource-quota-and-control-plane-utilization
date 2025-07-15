@@ -14,7 +14,7 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/outofoffice3/aws-samples/geras/internal/nau"
-	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 // VPCNAUJob calculates Network Address Usage (NAU) for each VPC in a region
@@ -65,7 +65,7 @@ func NewVPCNAUJob(
 
 // Execute calculates NAU for all VPCs and generates utilization metrics.
 // Returns one CloudWatch metric per VPC with utilization percentage.
-func (j *VPCNAUJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatchMetric, error) {
+func (j *VPCNAUJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
 	// Get the raw NAU totals per VPC
 	output, err := j.nauCalculator.CalculateNau()
 	if err != nil {
@@ -93,16 +93,16 @@ func (j *VPCNAUJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatchMetric
 	quotaValue := aws.ToFloat64(getServiceQuotaOutput.Quota.Value)
 
 	// Convert to CloudWatch metrics
-	out := make([]sharedTypes.CloudWatchMetric, 0, len(keys))
+	out := make([]types.CloudWatchMetric, 0, len(keys))
 	for _, vpcId := range keys {
 		j.Logger.Debug("%s calculating nau utilization for %s", j.GetJobName(), vpcId)
 		vpcNAU := output[vpcId]
 		j.Logger.Debug("%s : units %d, quota value %.2f", j.GetJobName(), vpcNAU, quotaValue)
 		nauUtilization := float64(vpcNAU) / float64(quotaValue)
-		metric := sharedTypes.CloudWatchMetric{
+		metric := types.CloudWatchMetric{
 			Name:      cloudwatchMetricName,
 			Value:     nauUtilization,
-			Unit:      sharedTypes.UnitPercent,
+			Unit:      types.UnitPercent,
 			Metadata:  map[string]string{"vpc": vpcId},
 			Timestamp: now,
 		}

@@ -11,22 +11,27 @@ import (
 
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/batch/cloudtrail"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
-const (
-	// Error message constants for rate limit handler validation.
-	CloudTrailBatcherNilErrMsg = "cloudtrail batcher is nil"
-	NamespaceNotSetErrMsg      = "namespace is not set"
+var (
+	// Error variables for rate limit handler validation.
+	ErrCloudTrailBatcherNil = errors.New("cloudtrail batcher is nil")
+	ErrNamespaceNotSet      = errors.New("namespace is not set")
+	ErrHandlerNotInitialized = errors.New("handler not initialized")
 )
+
+// RateLimitEventHandler defines the interface for handling SQS events.
+type RateLimitEventHandler interface {
+	HandleEvent(ctx context.Context, event events.SQSEvent) ([]events.SQSBatchItemFailure, error)
+}
 
 // RateLimitHandler processes SQS events containing CloudTrail data
 // and batches them into EMF records for CloudWatch metrics.
 type RateLimitHandler struct {
-	Batcher     cloudtrail.Batcher
-	Logger      logger.Logger
-	initialized bool
-	Namespace   string
+	Batcher   cloudtrail.Batcher
+	Logger    logger.Logger
+	Namespace string
 }
 
 // RateLimitHandlerConfig contains configuration parameters for RateLimitHandler.
@@ -45,18 +50,19 @@ func NewRateLimitHandler(config RateLimitHandlerConfig) (*RateLimitHandler, erro
 	}
 	// validate batcher
 	if config.Batcher == nil {
-		return nil, LogAndReturnError(errors.New(CloudTrailBatcherNilErrMsg), config.Logger)
+		config.Logger.Error("Handler error: %v", ErrCloudTrailBatcherNil)
+		return nil, ErrCloudTrailBatcherNil
 	}
 	// validate namespace
 	if config.Namespace == "" {
-		return nil, LogAndReturnError(errors.New(NamespaceNotSetErrMsg), config.Logger)
+		config.Logger.Error("Handler error: %v", ErrNamespaceNotSet)
+		return nil, ErrNamespaceNotSet
 	}
 	// construct handler
 	rlh := &RateLimitHandler{
-		Batcher:     config.Batcher,
-		Logger:      config.Logger,
-		Namespace:   config.Namespace,
-		initialized: true,
+		Batcher:   config.Batcher,
+		Logger:    config.Logger,
+		Namespace: config.Namespace,
 	}
 	rlh.Logger.Info("RateLimitHandler initialized for namespace %s", config.Namespace)
 	return rlh, nil
@@ -73,9 +79,6 @@ func (rlh *RateLimitHandler) HandleEvent(
 	ctx context.Context,
 	event events.SQSEvent,
 ) ([]events.SQSBatchItemFailure, error) {
-	if !rlh.initialized {
-		return nil, errors.New("handler not initialized")
-	}
 	rlh.Logger.Info("Received %d records from SQS event", len(event.Records))
 
 	// Process messages sequentially
@@ -115,7 +118,7 @@ func (rlh *RateLimitHandler) handleFlushCommand(ctx context.Context, messageId s
 
 // handleCloudTrailEvent processes CloudTrail events.
 func (rlh *RateLimitHandler) handleCloudTrailEvent(ctx context.Context, msg events.SQSMessage) *events.SQSBatchItemFailure {
-	var ctEvent sharedtypes.CloudTrailEvent
+	var ctEvent types.CloudTrailEvent
 	if err := json.Unmarshal([]byte(msg.Body), &ctEvent); err != nil {
 		rlh.Logger.Error("failed to unmarshal SQS message %s: %v", msg.MessageId, err)
 		return &events.SQSBatchItemFailure{ItemIdentifier: msg.MessageId}
@@ -125,8 +128,4 @@ func (rlh *RateLimitHandler) handleCloudTrailEvent(ctx context.Context, msg even
 	return nil
 }
 
-// LogAndReturnError provides centralized error logging for handler operations.
-func LogAndReturnError(err error, applogger logger.Logger) error {
-	applogger.Error("Handler error: %v", err)
-	return err
-}
+

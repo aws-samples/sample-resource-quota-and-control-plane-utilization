@@ -172,7 +172,7 @@ func calculateNauForEni(eni ec2Types.NetworkInterface, convertedEniType NetworkI
 				prefixNauRecords = makeNauRecords(eni, PrefixAssignedToENI, wt, region)
 			}
 			totalRecords := make([]NauRecord, 0, len(eniNauRecords)+len(prefixNauRecords))
-			totalRecords = append(totalRecords, ipNauRecords...)
+			totalRecords = append(totalRecords, eniNauRecords...)
 			totalRecords = append(totalRecords, prefixNauRecords...)
 			return totalRecords, nil
 		}

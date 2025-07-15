@@ -16,7 +16,7 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/emf"
 	cloudtrail "github.com/outofoffice3/aws-samples/geras/internal/emf/batch/cloudtrail"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/flusher"
-	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
+	"github.com/outofoffice3/aws-samples/geras/internal/safestore"
 	"github.com/outofoffice3/aws-samples/geras/internal/handlers"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/outofoffice3/aws-samples/geras/internal/utils"
@@ -130,7 +130,7 @@ func main() {
 	}
 
 	// 5) Build CWL client map
-	cwlClientMap := safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
+	cwlClientMap := safestore.NewSyncStore[cwlclient.CloudWatchLogsClient]()
 	for _, r := range regions {
 		client, err := clientFactory.CreateCloudWatchLogs(r)
 		if err != nil {
@@ -140,16 +140,19 @@ func main() {
 	}
 
 	// 6) Shared EMF flusher
-	flusher := emf.NewEMFFlusher(flusher.EMFFlusherConfig{
-		CwlClientMap:  &cwlClientMap,
+	flusher, err := emf.NewEMFFlusher(flusher.EMFFlusherConfig{
+		CwlClientMap:  cwlClientMap,
 		LogStreamName: logStreamName,
 		LogGroupName:  cloudwatchLogGroup,
 		Logger:        appLogger,
 	})
+	if err != nil {
+		HandleInitError(appLogger, err)
+	}
 
 	// 7) CloudTrail EMF batcher
 	lastFlushFile := filepath.Join(os.TempDir(), LastFlushTimestampFileName)
-	cloudtrailBatcher := cloudtrail.NewCTFileBatcher(cloudtrail.CTFileBatcherConfig{
+	cloudtrailBatcher, err := cloudtrail.NewCTFileBatcher(cloudtrail.CTFileBatcherConfig{
 		BaseDir:            os.TempDir(),
 		Namespace:          namespace,
 		MetricName:         metricNameRequestsPerSecond,
@@ -159,6 +162,9 @@ func main() {
 		EmfFlusher:         flusher,
 		Logger:             appLogger,
 	})
+	if err != nil {
+		HandleInitError(appLogger, err)
+	}
 
 	// 8) RateLimit handler
 	RateLimitHandler, err = handlers.NewRateLimitHandler(handlers.RateLimitHandlerConfig{

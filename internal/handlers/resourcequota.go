@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/factory"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/batch/metrics"
-	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
+	"github.com/outofoffice3/aws-samples/geras/internal/safestore"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/outofoffice3/aws-samples/geras/internal/nau"
@@ -26,7 +26,14 @@ var (
 	ErrJobManagerNil             = errors.New("job manager is nil")
 	ErrServiceConfigNil          = errors.New("service config is nil")
 	ErrStoreNil                  = errors.New("nau store is nil")
+	ErrMetricFlushFailed         = errors.New("failed to flush metrics")
+	ErrStoreCloseFailed          = errors.New("failed to close store")
 )
+
+// ResourceQuotaEventHandler defines the interface for handling CloudWatch events.
+type ResourceQuotaEventHandler interface {
+	HandleEvent(ctx context.Context, event events.CloudWatchEvent) error
+}
 
 // ResourceQuotaHandler processes scheduled CloudWatch events to trigger
 // resource quota monitoring jobs, coordinate metric collection, and close the NAU store.
@@ -35,8 +42,8 @@ type ResourceQuotaHandler struct {
 	CloudwatchLogGroup  string
 	CloudWatchLogStream string
 	Namespace           string
-	RegionalBatchers    *safemap.TypedMap[metrics.Batcher]
-	JobManager          *job.JobManager
+	RegionalBatchers    safestore.Store[metrics.Batcher]
+	JobManager          job.JobManager
 	ServiceConfig       *serviceconfig.TopLevelServiceConfig
 	Store               nau.AccountNauStore
 	Logger              logger.Logger
@@ -48,8 +55,8 @@ type ResourceQuotaHandlerConfig struct {
 	CloudwatchLogGroup  string
 	CloudWatchLogStream string
 	Namespace           string
-	RegionalBatchers    *safemap.TypedMap[metrics.Batcher]
-	JobManager          *job.JobManager
+	RegionalBatchers    safestore.Store[metrics.Batcher]
+	JobManager          job.JobManager
 	ServiceConfig       *serviceconfig.TopLevelServiceConfig
 	Store               nau.AccountNauStore
 	Logger              logger.Logger
@@ -108,22 +115,38 @@ func (h *ResourceQuotaHandler) HandleEvent(ctx context.Context, event events.Clo
 	h.Logger.Info("all jobs completed")
 
 	// 2) Flush metrics for each region
+	if err := h.flushAllMetrics(ctx); err != nil {
+		return err
+	}
+
+	// 3) Close the NAU store
+	if err := h.closeStore(); err != nil {
+		return err
+	}
+
+	h.Logger.Info("resource handler completed")
+	return nil
+}
+
+// flushAllMetrics flushes metrics for all regions.
+func (h *ResourceQuotaHandler) flushAllMetrics(ctx context.Context) error {
 	h.Logger.Info("flushing metrics to CloudWatch Logs for all regions")
 	h.RegionalBatchers.Range(func(region string, batcher metrics.Batcher) bool {
 		batcher.FlushAll(ctx)
 		return true
 	})
 	h.Logger.Info("cloudwatch metric batchers completed in all regions")
+	return nil
+}
 
-	// 3) Close the NAU store (was previously on JobManager.Wait path)
+// closeStore closes the NAU store and handles errors.
+func (h *ResourceQuotaHandler) closeStore() error {
 	h.Logger.Info("closing NAU store")
 	if err := h.Store.Close(); err != nil {
 		h.Logger.Error("error closing NAU store: %v", err)
-		return err
+		return ErrStoreCloseFailed
 	}
 	h.Logger.Info("NAU store closed")
-
-	h.Logger.Info("resource handler completed")
 	return nil
 }
 

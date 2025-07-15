@@ -15,7 +15,7 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 // NetworkInterfaceJob monitors EC2 network interface usage against service quotas.
@@ -63,7 +63,7 @@ func NewNetworkInterfaceJob(config NetworkInterfaceJobConfig) (job.Job, error) {
 
 // Execute counts network interfaces and calculates quota utilization.
 // Returns a CloudWatch metric with the utilization percentage.
-func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatchMetric, error) {
+func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
 	input := &ec2.DescribeNetworkInterfacesInput{}
 	var totalCount int64 = 0
 
@@ -91,14 +91,14 @@ func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]sharedTypes.Clou
 	utilization := (float64(totalCount) / quotaValue) * float64(100)
 	percent := strconv.FormatFloat(utilization, 'f', -1, 64)
 	nic.Logger.Debug("%s total=%d, quota=%.2f, utilization=%q%%", nic.GetJobName(), totalCount, quotaValue, percent)
-	metric := sharedTypes.CloudWatchMetric{
+	metric := types.CloudWatchMetric{
 		Name:      cloudwatchMetricName,
 		Value:     utilization,
-		Unit:      sharedTypes.UnitPercent,
+		Unit:      types.UnitPercent,
 		Metadata:  nil,
 		Timestamp: time.Now(),
 	}
-	return []sharedTypes.CloudWatchMetric{metric}, nil
+	return []types.CloudWatchMetric{metric}, nil
 }
 
 // GetJobName returns the unique identifier for this job.

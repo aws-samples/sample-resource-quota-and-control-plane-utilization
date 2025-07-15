@@ -15,7 +15,7 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/emf"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/batch/metrics"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/flusher"
-	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
+	"github.com/outofoffice3/aws-samples/geras/internal/safestore"
 	"github.com/outofoffice3/aws-samples/geras/internal/handlers"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
@@ -76,6 +76,7 @@ var (
 	ErrCreateIAMRolesJob          = errors.New("error creating IAM roles job")
 	ErrCreateGP3StorageJob        = errors.New("error creating GP3 storage job")
 	ErrCreateVPCNAUJob            = errors.New("error creating VPC NAU job")
+	ErrCreateJobManager           = errors.New("error creating job manager")
 )
 
 // Handler‐creation errors
@@ -359,14 +360,14 @@ type InitMetricBatchersInput struct {
 }
 
 // initMetricBatchers returns a map of region → metrics.Batcher.
-func initMetricBatchers(input InitMetricBatchersInput) *safemap.TypedMap[metrics.Batcher] {
+func initMetricBatchers(input InitMetricBatchersInput) safestore.Store[metrics.Batcher] {
 	log := input.Logger
 	if log == nil {
 		log = logger.Get()
 	}
 
-	// 1) Build a TypedMap of CloudWatch Logs clients
-	cwlClients := safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
+	// 1) Build a store of CloudWatch Logs clients
+	cwlClients := safestore.NewSyncStore[cwlclient.CloudWatchLogsClient]()
 	for _, region := range input.Regions {
 		client, err := input.ClientFactory.CreateCloudWatchLogs(region)
 		if err != nil {
@@ -380,17 +381,24 @@ func initMetricBatchers(input InitMetricBatchersInput) *safemap.TypedMap[metrics
 	}
 
 	// 2) Create a single EMF flusher backed by that client map
-	emfFlusher := emf.NewEMFFlusher(flusher.EMFFlusherConfig{
-		CwlClientMap:  &cwlClients,
+	emfFlusher, err := emf.NewEMFFlusher(flusher.EMFFlusherConfig{
+		CwlClientMap:  cwlClients,
 		LogGroupName:  input.LogGroup,
 		LogStreamName: input.LogStream,
 		Logger:        log,
 	})
+	if err != nil {
+		fatal(FatalInput{
+			Logger:  log,
+			ErrType: ErrInitMetricBatcher,
+			Cause:   err,
+		})
+	}
 
 	// 3) Build one MetricsBatcher per region
-	batchers := safemap.TypedMap[metrics.Batcher]{}
+	batchers := safestore.NewSyncStore[metrics.Batcher]()
 	for _, region := range input.Regions {
-		batcher := metrics.NewMetricsBatcher(metrics.MetricsBatcherConfig{
+		batcher, err := metrics.NewMetricsBatcher(metrics.MetricsBatcherConfig{
 			Namespace:  input.Namespace,
 			LogGroup:   input.LogGroup,
 			LogStream:  input.LogStream,
@@ -400,11 +408,18 @@ func initMetricBatchers(input InitMetricBatchersInput) *safemap.TypedMap[metrics
 			EmfFlusher: emfFlusher,
 			Logger:     log,
 		})
+		if err != nil {
+			fatal(FatalInput{
+				Logger:  log,
+				ErrType: ErrInitMetricBatcher,
+				Cause:   err,
+			})
+		}
 		batchers.Store(region, batcher)
 		log.Info("metrics batcher ready for region %s", region)
 	}
 
-	return &batchers
+	return batchers
 }
 
 // BuildJobManagerInput contains parameters for building the job manager.
@@ -413,7 +428,7 @@ type BuildJobManagerInput struct {
 	ClientFactory awsclientsFactory.ClientFactory
 	store         nau.AccountNauStore
 	Regions       []string
-	BatcherMap    *safemap.TypedMap[metrics.Batcher]
+	BatcherMap    safestore.Store[metrics.Batcher]
 	Services      map[string]serviceconfig.ServiceConfig
 	S3BucketName  string
 	HomeRegion    string
@@ -421,17 +436,24 @@ type BuildJobManagerInput struct {
 }
 
 // buildJobManager creates jobs for each service/region combination based on config
-func buildJobManager(input BuildJobManagerInput) *job.JobManager {
+func buildJobManager(input BuildJobManagerInput) job.JobManager {
 	log := input.Logger
 	clientFactory := input.ClientFactory
 
-	jm := job.NewJobManager(job.JobManagerConfig{
+	jm, err := job.NewJobManager(job.JobManagerConfig{
 		ParentCtx:  input.Ctx,
 		Workers:    defaultWorkerCount,
 		JobTimeout: defaultJobTimeout,
 		BatcherMap: input.BatcherMap,
 		Log:        log,
 	})
+	if err != nil {
+		fatal(FatalInput{
+			Logger:  log,
+			ErrType: ErrCreateJobManager,
+			Cause:   err,
+		})
+	}
 
 	var (
 		iamServiceQuotaRegion = utils.AwsRegionUSEast1.String()
@@ -540,9 +562,9 @@ func buildJobManager(input BuildJobManagerInput) *job.JobManager {
 							})
 						}
 						job, err := oidcproviders.NewOIDCProviderJob(oidcproviders.OIDCProviderJobConfig{
-							IamClient:          iamClient,
-							ServiceQuotasCliet: sqClient,
-							Logger:             log,
+							IamClient:           iamClient,
+							ServiceQuotasClient: sqClient,
+							Logger:              log,
 						})
 						if err != nil {
 							fatal(FatalInput{
@@ -670,8 +692,8 @@ type InitResourceQuotaHandlerInput struct {
 	LogGroup         string                             // CloudWatch log group name
 	LogStream        string                             // CloudWatch log stream name
 	Namespace        string                             // Metrics namespace
-	RegionalBatchers *safemap.TypedMap[metrics.Batcher] // Region-specific metric batchers
-	JobManager       *job.JobManager
+	RegionalBatchers safestore.Store[metrics.Batcher] // Region-specific metric batchers
+	JobManager       job.JobManager
 	Store            nau.AccountNauStore                  // Job execution coordinator
 	ServiceConfig    *serviceconfig.TopLevelServiceConfig // Service monitoring config
 	Logger           logger.Logger                        // Logger instance
@@ -709,7 +731,7 @@ type FatalInput struct {
 }
 
 // addJobWithRetry attempts to add a job with exponential backoff retry logic.
-func addJobWithRetry(jm *job.JobManager, j job.Job, log logger.Logger) error {
+func addJobWithRetry(jm job.JobManager, j job.Job, log logger.Logger) error {
 	for attempt := 0; attempt < defaultJobAddMaxRetries; attempt++ {
 		if err := jm.AddJob(j); err != nil {
 			if attempt == defaultJobAddMaxRetries-1 {

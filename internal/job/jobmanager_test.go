@@ -3,111 +3,647 @@ package job
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/batch/metrics"
-	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
+	"github.com/outofoffice3/aws-samples/geras/internal/safestore"
 	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// fakeJob implements Job for testing.
-type fakeJob struct {
-	region  string
-	name    string
-	metrics []sharedtypes.CloudWatchMetric
-	err     error
+// controllableJob implements Job with configurable behavior for testing.
+type controllableJob struct {
+	region            string
+	name              string
+	metrics           []sharedtypes.CloudWatchMetric
+	err               error
+	delay             time.Duration
+	panicOnExec       bool
+	callCount         int
+	failuresRemaining int
+	mu                sync.Mutex
 }
 
-func (f *fakeJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
-	return f.metrics, f.err
-}
-func (f *fakeJob) GetRegion() string  { return f.region }
-func (f *fakeJob) GetJobName() string { return f.name }
+func (c *controllableJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
+	c.mu.Lock()
+	c.callCount++
+	if c.failuresRemaining > 0 {
+		c.failuresRemaining--
+		c.mu.Unlock()
+		return nil, errors.New("temporary failure")
+	}
+	c.mu.Unlock()
 
-// fakeBatcher records Add calls.
-type fakeBatcher struct {
-	adds []sharedtypes.CloudWatchMetric
+	if c.panicOnExec {
+		panic("test panic")
+	}
+
+	if c.delay > 0 {
+		select {
+		case <-time.After(c.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	return c.metrics, c.err
 }
 
-func (fb *fakeBatcher) Add(ctx context.Context, m sharedtypes.CloudWatchMetric) {
-	fb.adds = append(fb.adds, m)
-}
-func (fb *fakeBatcher) FlushAll(ctx context.Context) {
-	// no-op
+func (c *controllableJob) GetRegion() string  { return c.region }
+func (c *controllableJob) GetJobName() string { return c.name }
+func (c *controllableJob) GetCallCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.callCount
 }
 
-func TestJobManagerScenarios(t *testing.T) {
-	logger.Init(logger.INFO, nil)
-	log := logger.Get()
+// trackingBatcher records all Add calls with timestamps.
+type trackingBatcher struct {
+	adds      []sharedtypes.CloudWatchMetric
+	callTimes []time.Time
+	mu        sync.Mutex
+}
 
+func (t *trackingBatcher) Add(ctx context.Context, m sharedtypes.CloudWatchMetric) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.adds = append(t.adds, m)
+	t.callTimes = append(t.callTimes, time.Now())
+}
+
+func (t *trackingBatcher) FlushAll(ctx context.Context) {}
+
+func (t *trackingBatcher) GetAdds() []sharedtypes.CloudWatchMetric {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]sharedtypes.CloudWatchMetric(nil), t.adds...)
+}
+
+func (t *trackingBatcher) GetCallCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.adds)
+}
+
+// Test helper functions
+func createTestMetrics(count int, withVPC bool) []sharedtypes.CloudWatchMetric {
+	metrics := make([]sharedtypes.CloudWatchMetric, count)
+	for i := 0; i < count; i++ {
+		metric := sharedtypes.CloudWatchMetric{
+			Name:     fmt.Sprintf("metric-%d", i),
+			Value:    float64(i * 10),
+			Metadata: make(map[string]string),
+		}
+		if withVPC {
+			metric.Metadata[MetadataKeyVPC] = fmt.Sprintf("vpc-%d", i)
+		}
+		metrics[i] = metric
+	}
+	return metrics
+}
+
+func setupTestJobManager(t *testing.T, config JobManagerConfig) (JobManager, *trackingBatcher) {
+	if config.Log == nil {
+		logger.Init(logger.INFO, nil)
+		config.Log = logger.Get()
+	}
+	if config.ParentCtx == nil {
+		config.ParentCtx = context.Background()
+	}
+	if config.Workers == 0 {
+		config.Workers = 1
+	}
+	if config.JobTimeout == 0 {
+		config.JobTimeout = 100 * time.Millisecond
+	}
+
+	batcher := &trackingBatcher{}
+	batchers := safestore.NewSyncStore[metrics.Batcher]()
+	batchers.Store("test-region", batcher)
+	config.BatcherMap = batchers
+
+	jm, err := NewJobManager(config)
+	require.NoError(t, err)
+	return jm, batcher
+}
+
+func TestNewJobManager(t *testing.T) {
 	tests := []struct {
 		name            string
-		cancelBeforeAdd bool
-		jobs            []*fakeJob
-		expectAdds      int
+		config          JobManagerConfig
+		expectWorkers   int
+		expectRetrySize int
 	}{
 		{
-			name:       "normal case",
-			jobs:       []*fakeJob{{region: "r1", name: "job1", metrics: []sharedtypes.CloudWatchMetric{{Name: "m1", Value: 1.23}}}},
-			expectAdds: 1,
+			name: "default configuration",
+			config: JobManagerConfig{
+				ParentCtx:  context.Background(),
+				Workers:    2,
+				JobTimeout: 50 * time.Millisecond,
+			},
+			expectWorkers:   2,
+			expectRetrySize: DefaultRetryBufferSize,
 		},
 		{
-			name:       "job returns error",
-			jobs:       []*fakeJob{{region: "r1", name: "jobErr", metrics: nil, err: errors.New("fail")}},
-			expectAdds: 0,
+			name: "custom retry buffer size",
+			config: JobManagerConfig{
+				ParentCtx:       context.Background(),
+				Workers:         1,
+				JobTimeout:      50 * time.Millisecond,
+				RetryBufferSize: 25,
+			},
+			expectWorkers:   1,
+			expectRetrySize: 25,
 		},
 		{
-			name:       "no matching batcher",
-			jobs:       []*fakeJob{{region: "rX", name: "jobX", metrics: []sharedtypes.CloudWatchMetric{{Name: "mX", Value: 0}}}},
-			expectAdds: 0,
-		},
-		{
-			name:            "context cancelled",
-			cancelBeforeAdd: true,
-			jobs:            []*fakeJob{{region: "r1", name: "job1", metrics: []sharedtypes.CloudWatchMetric{{Name: "m1", Value: 1}}}},
-			expectAdds:      0,
+			name: "zero retry buffer size uses default",
+			config: JobManagerConfig{
+				ParentCtx:       context.Background(),
+				Workers:         1,
+				JobTimeout:      50 * time.Millisecond,
+				RetryBufferSize: 0,
+			},
+			expectWorkers:   1,
+			expectRetrySize: DefaultRetryBufferSize,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// setup context
-			ctx, cancel := context.WithCancel(context.Background())
-			if tt.cancelBeforeAdd {
-				cancel()
-			}
+			jm, _ := setupTestJobManager(t, tt.config)
+			defer jm.Wait()
 
-			// setup batcher map
-			batchers := safemap.TypedMap[metrics.Batcher]{}
-			fb := &fakeBatcher{}
-			batchers.Store("r1", fb)
-
-			// create manager
-			jm := NewJobManager(JobManagerConfig{
-				ParentCtx:  ctx,
-				Workers:    1,
-				JobTimeout: 50 * time.Millisecond,
-				BatcherMap: &batchers,
-				Log:        log,
-			})
-
-			// enqueue jobs
-			for _, job := range tt.jobs {
-				_ = jm.AddJob(job) // Ignore error for test
-			}
-			// invoking LogError for coverage
-			jm.LogError(errors.New("test error"))
-
-			// wait for all
-			jm.Wait()
-
-			// assert adds
-			assert.Equal(t, tt.expectAdds, len(fb.adds))
-
-			cancel()
+			// Type assert to access internal fields for testing
+			jmImpl := jm.(*jobManager)
+			assert.Equal(t, tt.expectWorkers, jmImpl.workers)
+			assert.Equal(t, tt.expectRetrySize, cap(jmImpl.retryCh))
+			assert.Equal(t, DefaultBufferSize, cap(jmImpl.jobCh))
+			assert.NotNil(t, jmImpl.log)
 		})
 	}
+}
+
+func TestAddJob(t *testing.T) {
+	ctx := context.Background()
+	jm, _ := setupTestJobManager(t, JobManagerConfig{ParentCtx: ctx})
+	defer jm.Wait()
+
+	job := &controllableJob{region: "test-region", name: "test-job"}
+	err := jm.AddJob(job)
+	assert.NoError(t, err)
+}
+
+func TestNewJobManagerContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel context before creating JobManager
+
+	batchers := safestore.NewSyncStore[metrics.Batcher]()
+	config := JobManagerConfig{
+		ParentCtx:  ctx,
+		Workers:    1,
+		JobTimeout: 100 * time.Millisecond,
+		BatcherMap: batchers,
+	}
+
+	jm, err := NewJobManager(config)
+	assert.Error(t, err)
+	assert.Equal(t, ErrContextCancelled, err)
+	assert.Nil(t, jm)
+}
+
+func TestAddJobQueueFull(t *testing.T) {
+	ctx := context.Background()
+	jm, _ := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx:  ctx,
+		Workers:    1,               // Single worker
+		JobTimeout: 10 * time.Second, // Long timeout
+	})
+	defer jm.Wait()
+
+	// Add a long-running job to occupy the single worker
+	longRunningJob := &controllableJob{
+		region:  "test-region",
+		name:    "long-running-job",
+		delay:   3 * time.Second, // Keep worker busy longer
+		metrics: createTestMetrics(1, false),
+	}
+	err := jm.AddJob(longRunningJob)
+	require.NoError(t, err)
+
+	// Give the worker time to start processing the long-running job
+	time.Sleep(100 * time.Millisecond)
+
+	// Fill the queue to capacity while worker is busy
+	for i := 0; i < DefaultBufferSize; i++ {
+		job := &controllableJob{
+			region: "test-region",
+			name:   fmt.Sprintf("queue-job-%d", i),
+		}
+		err := jm.AddJob(job)
+		assert.NoError(t, err)
+	}
+
+	// This job should fail because queue is full and worker is busy
+	overflowJob := &controllableJob{region: "test-region", name: "overflow-job"}
+	err = jm.AddJob(overflowJob)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "primary job queue full")
+}
+
+func TestJobExecution(t *testing.T) {
+	tests := []struct {
+		name          string
+		job           *controllableJob
+		expectMetrics int
+		expectError   bool
+		expectRetries int
+	}{
+		{
+			name: "successful execution",
+			job: &controllableJob{
+				region:  "test-region",
+				name:    "success-job",
+				metrics: createTestMetrics(2, true),
+			},
+			expectMetrics: 2,
+		},
+		{
+			name: "job returns error",
+			job: &controllableJob{
+				region: "test-region",
+				name:   "error-job",
+				err:    errors.New("job failed"),
+			},
+			expectError: true,
+		},
+		{
+			name: "job with no metrics",
+			job: &controllableJob{
+				region:  "test-region",
+				name:    "empty-job",
+				metrics: []sharedtypes.CloudWatchMetric{},
+			},
+			expectMetrics: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			jm, batcher := setupTestJobManager(t, JobManagerConfig{
+				ParentCtx:  ctx,
+				MaxRetries: 2,
+			})
+
+			err := jm.AddJob(tt.job)
+			require.NoError(t, err)
+
+			jm.Wait()
+
+			if tt.expectError {
+				assert.Equal(t, 0, batcher.GetCallCount())
+			} else {
+				assert.Equal(t, tt.expectMetrics, batcher.GetCallCount())
+			}
+		})
+	}
+}
+
+func TestRetryLogic(t *testing.T) {
+	tests := []struct {
+		name             string
+		maxRetries       int
+		jobFailures      int
+		expectExecutions int
+		expectFinalError bool
+	}{
+		{
+			name:             "job succeeds on first try",
+			maxRetries:       2,
+			jobFailures:      0,
+			expectExecutions: 1,
+		},
+		{
+			name:             "job succeeds on retry",
+			maxRetries:       2,
+			jobFailures:      1,
+			expectExecutions: 2,
+		},
+		{
+			name:             "job fails all retries",
+			maxRetries:       2,
+			jobFailures:      3,
+			expectExecutions: 3,
+			expectFinalError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			job := &controllableJob{
+				region:  "test-region",
+				name:    "retry-job",
+				metrics: createTestMetrics(1, false),
+			}
+
+			// Set up job to fail specified number of times
+			job.failuresRemaining = tt.jobFailures
+
+			jm, batcher := setupTestJobManager(t, JobManagerConfig{
+				ParentCtx:  ctx,
+				MaxRetries: tt.maxRetries,
+			})
+
+			err := jm.AddJob(job)
+			require.NoError(t, err)
+
+			jm.Wait()
+
+			assert.Equal(t, tt.expectExecutions, job.GetCallCount())
+
+			if tt.expectFinalError {
+				assert.Equal(t, 0, batcher.GetCallCount())
+			} else {
+				assert.Equal(t, 1, batcher.GetCallCount())
+			}
+		})
+	}
+}
+
+func TestMetricDispatching(t *testing.T) {
+	tests := []struct {
+		name             string
+		metrics          []sharedtypes.CloudWatchMetric
+		region           string
+		expectDispatched int
+	}{
+		{
+			name:             "single metric with VPC",
+			metrics:          createTestMetrics(1, true),
+			region:           "test-region",
+			expectDispatched: 1,
+		},
+		{
+			name:             "multiple metrics without VPC",
+			metrics:          createTestMetrics(3, false),
+			region:           "test-region",
+			expectDispatched: 3,
+		},
+		{
+			name:             "no matching batcher",
+			metrics:          createTestMetrics(1, false),
+			region:           "unknown-region",
+			expectDispatched: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			jm, batcher := setupTestJobManager(t, JobManagerConfig{ParentCtx: ctx})
+
+			job := &controllableJob{
+				region:  tt.region,
+				name:    "dispatch-test",
+				metrics: tt.metrics,
+			}
+
+			err := jm.AddJob(job)
+			require.NoError(t, err)
+
+			jm.Wait()
+
+			assert.Equal(t, tt.expectDispatched, batcher.GetCallCount())
+		})
+	}
+}
+
+func TestContextCancellation(t *testing.T) {
+	tests := []struct {
+		name       string
+		cancelDelay time.Duration
+		jobDelay    time.Duration
+	}{
+		{
+			name:        "cancel before job completes",
+			cancelDelay: 20 * time.Millisecond,
+			jobDelay:    100 * time.Millisecond,
+		},
+		{
+			name:        "cancel after job starts",
+			cancelDelay: 50 * time.Millisecond,
+			jobDelay:    30 * time.Millisecond,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+
+			job := &controllableJob{
+				region:  "test-region",
+				name:    "cancel-test",
+				metrics: createTestMetrics(3, false),
+				delay:   tt.jobDelay,
+			}
+
+			jm, batcher := setupTestJobManager(t, JobManagerConfig{
+				ParentCtx:  ctx,
+				JobTimeout: 500 * time.Millisecond,
+			})
+
+			err := jm.AddJob(job)
+			require.NoError(t, err)
+
+			// Cancel context after specified delay
+			go func() {
+				time.Sleep(tt.cancelDelay)
+				cancel()
+			}()
+
+			jm.Wait()
+
+			// Verify system handled cancellation gracefully
+			// Metrics count should be between 0 and total job metrics
+			count := batcher.GetCallCount()
+			assert.True(t, count >= 0 && count <= len(job.metrics),
+				"Expected metric count between 0 and %d, got %d", len(job.metrics), count)
+		})
+	}
+}
+
+func TestGetQueueStats(t *testing.T) {
+	ctx := context.Background()
+	jm, _ := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx: ctx,
+		Workers:   1,
+		JobTimeout: 5 * time.Second, // Long timeout to prevent job timeout
+	})
+	defer jm.Wait()
+
+	// Initially empty
+	primary, retry := jm.GetQueueStats()
+	assert.Equal(t, 0, primary)
+	assert.Equal(t, 0, retry)
+
+	// Add a long-running job to occupy the worker
+	longJob := &controllableJob{
+		region: "test-region",
+		name:   "long-running-job",
+		delay:  1 * time.Second, // Keep worker busy
+	}
+	err := jm.AddJob(longJob)
+	require.NoError(t, err)
+
+	// Give worker time to start processing the long job
+	time.Sleep(10 * time.Millisecond)
+
+	// Add jobs that will queue up while worker is busy
+	for i := 0; i < 3; i++ {
+		job := &controllableJob{
+			region: "test-region",
+			name:   fmt.Sprintf("queued-job-%d", i),
+		}
+		err := jm.AddJob(job)
+		require.NoError(t, err)
+	}
+
+	// Now check queue stats - should have 3 jobs queued
+	primary, retry = jm.GetQueueStats()
+	assert.Equal(t, 3, primary) // 3 jobs waiting in primary queue
+	assert.Equal(t, 0, retry)   // No retry jobs
+}
+
+func TestConcurrentOperations(t *testing.T) {
+	ctx := context.Background()
+	jm, batcher := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx:  ctx,
+		Workers:    3,
+		JobTimeout: 200 * time.Millisecond,
+	})
+
+	const numJobs = 20
+	var addWg sync.WaitGroup
+
+	// Add jobs concurrently
+	for i := 0; i < numJobs; i++ {
+		addWg.Add(1)
+		go func(id int) {
+			defer addWg.Done()
+			job := &controllableJob{
+				region:  "test-region",
+				name:    fmt.Sprintf("concurrent-job-%d", id),
+				metrics: createTestMetrics(1, false),
+				delay:   5 * time.Millisecond,
+			}
+			err := jm.AddJob(job)
+			assert.NoError(t, err)
+		}(i)
+	}
+
+	// Wait for all jobs to be added
+	addWg.Wait()
+	
+	// Wait for all jobs to be processed
+	jm.Wait()
+	
+	// Give a small buffer for final metric dispatching
+	time.Sleep(10 * time.Millisecond)
+
+	// All jobs should have been processed
+	assert.Equal(t, numJobs, batcher.GetCallCount())
+}
+
+func TestLogError(t *testing.T) {
+	ctx := context.Background()
+	jm, _ := setupTestJobManager(t, JobManagerConfig{ParentCtx: ctx})
+
+	// Test LogError method (mainly for coverage)
+	testErr := errors.New("test error")
+	jm.LogError(testErr)
+
+	jm.Wait()
+	// No assertion needed, just ensuring no panic
+}
+
+func TestJobTimeout(t *testing.T) {
+	ctx := context.Background()
+	jm, batcher := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx:  ctx,
+		JobTimeout: 30 * time.Millisecond, // Short timeout
+	})
+
+	job := &controllableJob{
+		region:  "test-region",
+		name:    "timeout-job",
+		metrics: createTestMetrics(1, false),
+		delay:   200 * time.Millisecond, // Much longer than timeout
+	}
+
+	err := jm.AddJob(job)
+	require.NoError(t, err)
+
+	jm.Wait()
+
+	// Give time for any potential race conditions to settle
+	time.Sleep(10 * time.Millisecond)
+
+	// Job should timeout and not dispatch metrics
+	assert.Equal(t, 0, batcher.GetCallCount())
+}
+
+func TestAddJobAfterWait(t *testing.T) {
+	ctx := context.Background()
+	jm, _ := setupTestJobManager(t, JobManagerConfig{ParentCtx: ctx})
+
+	// Add a job before shutdown
+	job1 := &controllableJob{region: "test-region", name: "before-shutdown"}
+	err := jm.AddJob(job1)
+	assert.NoError(t, err)
+
+	// Call Wait to initiate shutdown
+	go jm.Wait()
+
+	// Give shutdown time to initiate
+	time.Sleep(10 * time.Millisecond)
+
+	// Try to add job after shutdown - should fail
+	job2 := &controllableJob{region: "test-region", name: "after-shutdown"}
+	err = jm.AddJob(job2)
+	assert.Error(t, err)
+	assert.Equal(t, ErrJobManagerShutdown, err)
+}
+
+func TestShutdownWithQueuedJobs(t *testing.T) {
+	ctx := context.Background()
+	jm, batcher := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx: ctx,
+		Workers:   1,
+	})
+
+	// Add multiple jobs
+	const numJobs = 5
+	for i := 0; i < numJobs; i++ {
+		job := &controllableJob{
+			region:  "test-region",
+			name:    fmt.Sprintf("queued-job-%d", i),
+			metrics: createTestMetrics(1, false),
+			delay:   10 * time.Millisecond,
+		}
+		err := jm.AddJob(job)
+		require.NoError(t, err)
+	}
+
+	// Wait for shutdown - all jobs should still be processed
+	jm.Wait()
+
+	// All jobs should have been processed despite shutdown
+	assert.Equal(t, numJobs, batcher.GetCallCount())
 }

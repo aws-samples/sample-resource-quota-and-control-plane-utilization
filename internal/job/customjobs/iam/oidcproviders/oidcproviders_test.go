@@ -131,8 +131,8 @@ func TestOIDCProviderJob_Execute(t *testing.T) {
 			}
 
 			cfg := OIDCProviderJobConfig{
-				IamClient:          iamFake,
-				ServiceQuotasCliet: servicequotaclient.ServiceQuotasClient(quotaFake),
+				IamClient:           iamFake,
+				ServiceQuotasClient: servicequotaclient.ServiceQuotasClient(quotaFake),
 			}
 			if !tc.useNilLogger {
 				cfg.Logger = &logger.NoopLogger{}

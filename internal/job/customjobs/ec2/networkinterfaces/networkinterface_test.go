@@ -55,35 +55,19 @@ func TestExecute_SuccessUsingFakeEC2(t *testing.T) {
 		ServiceQuotasClient: q,
 		Logger:              nil,
 	})
-	if err != nil {
-		t.Fatalf("NewNetworkInterfaceJob failed: %v", err)
-	}
+	assert.NoError(t, err, "NewNetworkInterfaceJob should not fail")
 
 	met, err := job.Execute(context.Background())
-	if err != nil {
-		t.Fatalf("Execute unexpected error: %v", err)
-	}
+	assert.NoError(t, err, "Execute should not return error")
 
 	// should get one metric: (3+2)/10*100 = 50
-	if len(met) != 1 {
-		t.Fatalf("expected exactly one metric, got %d", len(met))
-	}
+	assert.Len(t, met, 1, "should return exactly one metric")
 	m := met[0]
-	if m.Name != cloudwatchMetricName {
-		t.Errorf("bad metric name: %q", m.Name)
-	}
-	if m.Value != 50 {
-		t.Errorf("expected 50%%, got %.1f", m.Value)
-	}
-	if !q.called {
-		t.Errorf("expected quota client to be called")
-	}
-	if job.GetRegion() != "r1" {
-		t.Errorf("GetRegion mismatch: %s", job.GetRegion())
-	}
-	if !startsWith(job.GetJobName(), networkInterfaceJobPrefix+"-r1") {
-		t.Errorf("GetJobName mismatch: %s", job.GetJobName())
-	}
+	assert.Equal(t, cloudwatchMetricName, m.Name, "metric name mismatch")
+	assert.Equal(t, 50.0, m.Value, "expected 50%% utilization")
+	assert.True(t, q.called, "quota client should be called")
+	assert.Equal(t, "r1", job.GetRegion(), "region mismatch")
+	assert.True(t, startsWith(job.GetJobName(), networkInterfaceJobPrefix+"-r1"), "job name should contain prefix and region")
 }
 
 func TestExecute_QuotaError(t *testing.T) {
@@ -100,9 +84,8 @@ func TestExecute_QuotaError(t *testing.T) {
 	})
 
 	_, err := job.Execute(context.Background())
-	if err == nil || err.Error() != "quota boom" {
-		t.Fatalf("expected quota boom error, got %v", err)
-	}
+	assert.Error(t, err, "should return error")
+	assert.Contains(t, err.Error(), "quota boom", "should contain expected error message")
 }
 
 func TestExecute_PaginatorError(t *testing.T) {
@@ -119,9 +102,8 @@ func TestExecute_PaginatorError(t *testing.T) {
 	})
 
 	_, err := job.Execute(context.Background())
-	if err == nil || err.Error() != "ec2 describenetworkinterfaces error" {
-		assert.ErrorContains(t, err, "error", "expected pagination error")
-	}
+	assert.Error(t, err, "should return pagination error")
+	assert.Contains(t, err.Error(), "error", "should contain error message")
 }
 
 // Test that DescribeNetworkInterfaces pagination respects NextToken
@@ -139,14 +121,10 @@ func TestFakeEC2Pagination(t *testing.T) {
 	count := 0
 	for p.HasMorePages() {
 		out, err := p.NextPage(context.Background())
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		assert.NoError(t, err, "pagination should not error")
 		count += len(out.NetworkInterfaces)
 	}
-	if count != 1 {
-		t.Errorf("expected 1 interface total, got %d", count)
-	}
+	assert.Equal(t, 1, count, "should get exactly 1 interface total")
 }
 
 // helper

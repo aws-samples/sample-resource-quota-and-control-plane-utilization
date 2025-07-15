@@ -20,7 +20,7 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/batch/cloudtrail"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/flusher"
 	"github.com/outofoffice3/aws-samples/geras/internal/extension"
-	"github.com/outofoffice3/aws-samples/geras/internal/generics/safemap"
+	"github.com/outofoffice3/aws-samples/geras/internal/safestore"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/outofoffice3/aws-samples/geras/internal/utils"
 )
@@ -127,7 +127,7 @@ func setupBatcher(ctx context.Context, log logger.Logger, clientFactory factory.
 		handleInitError(log, err)
 	}
 
-	cwlMap := &safemap.TypedMap[cwlclient.CloudWatchLogsClient]{}
+	cwlMap := safestore.NewSyncStore[cwlclient.CloudWatchLogsClient]()
 	for _, r := range config.regions {
 		c, err := clientFactory.CreateCloudWatchLogs(r)
 		if err != nil {
@@ -136,12 +136,15 @@ func setupBatcher(ctx context.Context, log logger.Logger, clientFactory factory.
 		cwlMap.Store(r, c)
 	}
 
-	ef := emf.NewEMFFlusher(flusher.EMFFlusherConfig{
+	ef, err := emf.NewEMFFlusher(flusher.EMFFlusherConfig{
 		CwlClientMap:  cwlMap,
 		LogGroupName:  config.logGroup,
 		LogStreamName: stream,
 		Logger:        log,
 	})
+	if err != nil {
+		handleInitError(log, err)
+	}
 
 	lastFlushFile := filepath.Join(os.TempDir(), "lastFlushTimestamp.txt")
 	lambdaInitFile := filepath.Join(os.TempDir(), "lambdaInitTimestamp.txt")
@@ -153,7 +156,7 @@ func setupBatcher(ctx context.Context, log logger.Logger, clientFactory factory.
 		log.Error("%s failed to write lambda init timestamp: %v", printPrefix, err)
 	}
 
-	return cloudtrail.NewCTFileBatcher(cloudtrail.CTFileBatcherConfig{
+	batcher, err := cloudtrail.NewCTFileBatcher(cloudtrail.CTFileBatcherConfig{
 		BaseDir:            os.TempDir(),
 		Namespace:          config.namespace,
 		MetricName:         metricNameRequestsPerSecond,
@@ -163,6 +166,10 @@ func setupBatcher(ctx context.Context, log logger.Logger, clientFactory factory.
 		EmfFlusher:         ef,
 		Logger:             log,
 	})
+	if err != nil {
+		handleInitError(log, err)
+	}
+	return batcher
 }
 
 func runExtension(ctx context.Context, log logger.Logger, batcher cloudtrail.Batcher) {

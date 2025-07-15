@@ -12,7 +12,7 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 // ListClusterJob will implment the Job interface
@@ -55,7 +55,7 @@ func NewListClusterJob(config ListClusterJobConfig) (job.Job, error) {
 
 }
 
-func (lj *ListClusterJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatchMetric, error) {
+func (lj *ListClusterJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
 
 	input := &eks.ListClustersInput{}
 	var totalCount int64 = 0
@@ -82,16 +82,16 @@ func (lj *ListClusterJob) Execute(ctx context.Context) ([]sharedTypes.CloudWatch
 	}
 	quotaValue := aws.ToFloat64(getServiceQuotaOutput.Quota.Value)
 	utilization := (float64(totalCount) / quotaValue) * 100
-	percent := strconv.FormatFloat(utilization, 'f', 01, 64)
+	percent := strconv.FormatFloat(utilization, 'f', -1, 64)
 	lj.Logger.Debug("%s total=%d , quota=%.2f, utilization=%q%%", lj.GetJobName(), totalCount, quotaValue, percent)
-	metric := sharedTypes.CloudWatchMetric{
+	metric := types.CloudWatchMetric{
 		Name:      cloudwatchMetricName,
 		Value:     utilization,
-		Unit:      sharedTypes.UnitPercent,
+		Unit:      types.UnitPercent,
 		Metadata:  nil,
 		Timestamp: time.Now(),
 	}
-	return []sharedTypes.CloudWatchMetric{metric}, nil
+	return []types.CloudWatchMetric{metric}, nil
 }
 
 // GetJobName return the name of the job

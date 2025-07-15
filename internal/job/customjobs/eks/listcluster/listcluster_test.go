@@ -13,6 +13,7 @@ import (
 	sqTypes "github.com/aws/aws-sdk-go-v2/service/servicequotas/types"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/eksclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
+	"github.com/stretchr/testify/assert"
 )
 
 // fakeQuotaClient implements servicequotaclient.ServiceQuotasClient.
@@ -103,44 +104,26 @@ func TestListClusterJob_WithYourFakeClient(t *testing.T) {
 				ServiceQuotasClient: servicequotaclient.ServiceQuotasClient(quotaFake),
 				Logger:              nil,
 			})
-			if err != nil {
-				t.Fatalf("NewListClusterJob failed: %v", err)
-			}
+			assert.NoError(t, err, "NewListClusterJob should not fail")
 
 			// execute
 			met, err := job.Execute(context.Background())
 			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got none")
-				}
+				assert.Error(t, err, "expected error but got none")
 				return
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			assert.NoError(t, err, "unexpected error")
 
 			// expected one metric
-			if len(met) != 1 {
-				t.Fatalf("got %d metrics, want 1", len(met))
-			}
+			assert.Len(t, met, 1, "should return exactly one metric")
 			got := met[0]
-			if got.Name != cloudwatchMetricName {
-				t.Errorf("Name = %q, want %q", got.Name, cloudwatchMetricName)
-			}
-			if got.Value != tc.wantPct {
-				t.Errorf("Value = %.2f, want %.2f", got.Value, tc.wantPct)
-			}
-			if !quotaFake.Called {
-				t.Error("quota client was not called")
-			}
+			assert.Equal(t, cloudwatchMetricName, got.Name, "metric name mismatch")
+			assert.Equal(t, tc.wantPct, got.Value, "utilization percentage mismatch")
+			assert.True(t, quotaFake.Called, "quota client should be called")
 
 			// also exercise getters
-			if job.GetRegion() != "r1" {
-				t.Errorf("GetRegion = %q", job.GetRegion())
-			}
-			if p := job.GetJobName(); len(p) == 0 || p[:len(listClusterJobPrefix)] != listClusterJobPrefix {
-				t.Errorf("GetJobName = %q", p)
-			}
+			assert.Equal(t, "r1", job.GetRegion(), "region mismatch")
+			assert.Contains(t, job.GetJobName(), listClusterJobPrefix, "job name should contain prefix")
 		})
 	}
 }

@@ -4,17 +4,59 @@ package metrics
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/outofoffice3/aws-samples/geras/internal/emf"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/builder"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedTypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+)
+
+// EMFBuilder interface for building EMF records
+type EMFBuilder interface {
+	Build(input builder.EMFInput, logger logger.Logger) (builder.EMFRecord, error)
+}
+
+// DefaultEMFBuilder implements EMFBuilder using the builder package
+type DefaultEMFBuilder struct{}
+
+func (DefaultEMFBuilder) Build(input builder.EMFInput, logger logger.Logger) (builder.EMFRecord, error) {
+	return builder.Build(input, logger)
+}
+
+// ThresholdChecker interface for checking flush thresholds
+type ThresholdChecker interface {
+	ShouldFlush(currentCount int, currentSize int64, newRecordSize int64, maxCount int, maxBytes int64) bool
+}
+
+// DefaultThresholdChecker implements ThresholdChecker
+type DefaultThresholdChecker struct{}
+
+func (DefaultThresholdChecker) ShouldFlush(currentCount int, currentSize int64, newRecordSize int64, maxCount int, maxBytes int64) bool {
+	newCount := currentCount + 1
+	newSize := currentSize + newRecordSize
+
+	return (maxCount > 0 && newCount >= maxCount) ||
+		(maxBytes > 0 && newSize >= maxBytes)
+}
+
+// Error constants for better error handling and testing
+var (
+	ErrInvalidConfig    = errors.New("invalid batcher configuration")
+	ErrEmptyNamespace   = errors.New("namespace cannot be empty")
+	ErrEmptyRegion      = errors.New("region cannot be empty")
+	ErrNilEMFFlusher    = errors.New("EMF flusher cannot be nil")
+	ErrInvalidThreshold = errors.New("invalid threshold configuration")
+	ErrBuildFailed      = errors.New("failed to build EMF record")
+	ErrFlushFailed      = errors.New("failed to flush batch")
 )
 
 // Batcher defines the interface for batching CloudWatch metrics and flushing them as EMF records.
 type Batcher interface {
-	Add(ctx context.Context, m sharedTypes.CloudWatchMetric)
+	Add(ctx context.Context, m types.CloudWatchMetric)
 	FlushAll(ctx context.Context)
 }
 
@@ -28,8 +70,10 @@ type MetricsBatcher struct {
 	maxCount  int
 	maxBytes  int64
 
-	emfFlusher emf.EMFFlusher
-	logger     logger.Logger
+	emfFlusher       emf.EMFFlusher
+	logger           logger.Logger
+	emfBuilder       EMFBuilder
+	thresholdChecker ThresholdChecker
 
 	mu      sync.Mutex
 	records []builder.EMFRecord
@@ -40,75 +84,100 @@ type MetricsBatcher struct {
 // MetricsBatcherConfig defines all configuration parameters needed to create
 // and configure a MetricsBatcher instance.
 type MetricsBatcherConfig struct {
-	Namespace  string         // EMF namespace
-	LogGroup   string         // CloudWatch Logs group
-	LogStream  string         // CloudWatch Logs stream
-	Region     string         // AWS region
-	MaxCount   int            // max records before pre-flush
-	MaxBytes   int64          // max bytes before pre-flush
-	EmfFlusher emf.EMFFlusher // EMF flusher implementation
-	Logger     logger.Logger  // Logger instance
+	Namespace        string           // EMF namespace
+	LogGroup         string           // CloudWatch Logs group
+	LogStream        string           // CloudWatch Logs stream
+	Region           string           // AWS region
+	MaxCount         int              // max records before pre-flush
+	MaxBytes         int64            // max bytes before pre-flush
+	EmfFlusher       emf.EMFFlusher   // EMF flusher implementation
+	Logger           logger.Logger    // Logger instance
+	EMFBuilder       EMFBuilder       // Optional, defaults to DefaultEMFBuilder
+	ThresholdChecker ThresholdChecker // Optional, defaults to DefaultThresholdChecker
+}
+
+// Validate checks if the configuration is valid
+func (cfg MetricsBatcherConfig) Validate() error {
+	if strings.TrimSpace(cfg.Namespace) == "" {
+		return fmt.Errorf("%w: %s", ErrInvalidConfig, ErrEmptyNamespace.Error())
+	}
+	if strings.TrimSpace(cfg.Region) == "" {
+		return fmt.Errorf("%w: %s", ErrInvalidConfig, ErrEmptyRegion.Error())
+	}
+	if cfg.EmfFlusher == nil {
+		return fmt.Errorf("%w: %s", ErrInvalidConfig, ErrNilEMFFlusher.Error())
+	}
+	if cfg.MaxCount < 0 || cfg.MaxBytes < 0 {
+		return fmt.Errorf("%w: %s", ErrInvalidConfig, ErrInvalidThreshold.Error())
+	}
+	return nil
 }
 
 // NewMetricsBatcher constructs a new in-memory MetricsBatcher with
 // the provided configuration and initializes internal state.
-func NewMetricsBatcher(cfg MetricsBatcherConfig) Batcher {
+func NewMetricsBatcher(cfg MetricsBatcherConfig) (Batcher, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	if cfg.Logger == nil {
 		cfg.Logger = logger.Get()
 	}
-	return &MetricsBatcher{
-		namespace:  cfg.Namespace,
-		logGroup:   cfg.LogGroup,
-		logStream:  cfg.LogStream,
-		region:     cfg.Region,
-		maxCount:   cfg.MaxCount,
-		maxBytes:   cfg.MaxBytes,
-		emfFlusher: cfg.EmfFlusher,
-		logger:     cfg.Logger,
-		records:    make([]builder.EMFRecord, 0),
+	if cfg.EMFBuilder == nil {
+		cfg.EMFBuilder = DefaultEMFBuilder{}
 	}
+	if cfg.ThresholdChecker == nil {
+		cfg.ThresholdChecker = DefaultThresholdChecker{}
+	}
+
+	return &MetricsBatcher{
+		namespace:        cfg.Namespace,
+		logGroup:         cfg.LogGroup,
+		logStream:        cfg.LogStream,
+		region:           cfg.Region,
+		maxCount:         cfg.MaxCount,
+		maxBytes:         cfg.MaxBytes,
+		emfFlusher:       cfg.EmfFlusher,
+		logger:           cfg.Logger,
+		emfBuilder:       cfg.EMFBuilder,
+		thresholdChecker: cfg.ThresholdChecker,
+		records:          make([]builder.EMFRecord, 0),
+	}, nil
 }
 
 // Add converts a CloudWatch metric to an EMF record, adds it to the batch,
 // and triggers pre-flush if size or count thresholds would be exceeded.
-func (mb *MetricsBatcher) Add(ctx context.Context, m sharedTypes.CloudWatchMetric) {
+func (mb *MetricsBatcher) Add(ctx context.Context, m types.CloudWatchMetric) {
 	err := m.Unit.Validate()
 	if err != nil {
-		m.Unit = sharedTypes.UnitPercent
+		m.Unit = types.UnitPercent
 	}
-	rec, err := builder.Build(builder.EMFInput{
+	rec, err := mb.emfBuilder.Build(builder.EMFInput{
 		Namespace:  mb.namespace,
 		MetricName: m.Name,
 		Value:      m.Value,
-		Unit:       m.Unit.UnitToString(),
-		Dimensions: func() [][]string {
-			dims := make([][]string, 0, len(m.Metadata))
-			for k, v := range m.Metadata {
-				dims = append(dims, []string{k, v})
-			}
-			return dims
-		}(),
-		Timestamp: m.Timestamp,
+		Unit:       m.Unit.String(),
+		Dimensions: BuildDimensions(m.Metadata),
+		Timestamp:  m.Timestamp,
 	}, mb.logger)
 	if err != nil {
-		mb.logger.Error("Add metric: build error: %v", err)
+		mb.logger.Error("Add metric: %v: %v", ErrBuildFailed, err)
 		return
 	}
 
 	mb.mu.Lock()
 	currCount := mb.count
 	currSize := mb.size
-	newCount := currCount + 1
 	recSize := int64(len(rec.Payload) + 1)
-	newSize := currSize + recSize
+
 	// Pre-flush if needed
-	if (mb.maxCount > 0 && newCount > mb.maxCount) ||
-		(mb.maxBytes > 0 && newSize > mb.maxBytes) {
+	if mb.thresholdChecker.ShouldFlush(currCount, currSize, recSize, mb.maxCount, mb.maxBytes) {
 		mb.mu.Unlock()
-		mb.logger.Info("MetricsBatcher: pre-threshold reached (count %d/%d, size %d/%d), flushing", newCount, mb.maxCount, newSize, mb.maxBytes)
+		mb.logger.Info("MetricsBatcher: pre-threshold reached (count %d/%d, size %d/%d), flushing", currCount+1, mb.maxCount, currSize+recSize, mb.maxBytes)
 		mb.FlushAll(ctx)
 		mb.mu.Lock()
 	}
+
 	// Append record
 	mb.records = append(mb.records, rec)
 	mb.count++
@@ -128,7 +197,7 @@ func (mb *MetricsBatcher) FlushAll(ctx context.Context) {
 	}
 
 	if err := mb.emfFlusher.Flush(ctx, mb.region, batch); err != nil {
-		mb.logger.Error("MetricsBatcher: flush error: %v", err)
+		mb.logger.Error("MetricsBatcher: %v: %v", ErrFlushFailed, err)
 	}
 
 	mb.mu.Lock()
@@ -136,4 +205,16 @@ func (mb *MetricsBatcher) FlushAll(ctx context.Context) {
 	mb.count = 0
 	mb.size = 0
 	mb.mu.Unlock()
+}
+
+// BuildDimensions converts metadata map to EMF dimensions format
+func BuildDimensions(metadata map[string]string) [][]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	dims := make([][]string, 0, len(metadata))
+	for k, v := range metadata {
+		dims = append(dims, []string{k, v})
+	}
+	return dims
 }

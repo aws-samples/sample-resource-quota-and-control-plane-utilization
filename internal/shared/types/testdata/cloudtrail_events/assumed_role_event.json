@@ -1,0 +1,31 @@
+{
+  "eventVersion": "1.05",
+  "userIdentity": {
+    "type": "AssumedRole",
+    "principalId": "AROACKCEVSQ6C2EXAMPLE:session-name",
+    "arn": "arn:aws:sts::123456789012:assumed-role/MyRole/session-name",
+    "accountId": "123456789012",
+    "sessionContext": {
+      "attributes": {
+        "creationDate": "2023-01-01T10:00:00Z",
+        "mfaAuthenticated": "false"
+      },
+      "sessionIssuer": {
+        "type": "Role",
+        "principalId": "AROACKCEVSQ6C2EXAMPLE",
+        "arn": "arn:aws:iam::123456789012:role/MyRole",
+        "userName": "MyRole"
+      }
+    }
+  },
+  "eventTime": "2023-01-01T12:00:00Z",
+  "eventSource": "s3.amazonaws.com",
+  "eventName": "GetObject",
+  "awsRegion": "us-west-2",
+  "sourceIPAddress": "10.0.0.1",
+  "userAgent": "aws-sdk-go/1.44.0",
+  "requestID": "req-12345",
+  "eventID": "evt-67890",
+  "errorCode": "AccessDenied",
+  "errorMessage": "Access Denied"
+}

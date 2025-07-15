@@ -8,7 +8,7 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/supportclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 )
 
 // gp3StorageJob will implement the Job interface
@@ -49,7 +49,7 @@ func NewGp3StorageJob(config Gp3StorageJobConfig) (job.Job, error) {
 }
 
 // Execute will refresh the trusted advisor for gp3 storage
-func (j *Gp3StorageJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
+func (j *Gp3StorageJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
 	// make call to trusted advisor via support API
 	output, err := j.supportClient.RefreshTrustedAdvisorCheck(ctx, &support.RefreshTrustedAdvisorCheckInput{
 		CheckId: aws.String(gp3StorageCheckId),
