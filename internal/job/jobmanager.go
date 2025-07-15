@@ -213,8 +213,26 @@ func (jm *jobManager) worker(id int) {
 			if ok {
 				jm.executeJob(jobWrapper, id)
 			} else {
-				return // Primary channel closed
+				// Primary channel closed, continue with retry jobs only
+				goto retryOnly
 			}
+		case retryJob, ok := <-jm.retryCh:
+			if ok {
+				jm.executeJob(retryJob, id)
+			} else {
+				return // Retry channel closed
+			}
+		case <-jm.shutdownCtx.Done():
+			// Shutdown signaled, drain remaining jobs
+			jm.drainRemainingJobs(id)
+			return
+		}
+	}
+
+retryOnly:
+	// Process only retry jobs after primary channel closes
+	for {
+		select {
 		case retryJob, ok := <-jm.retryCh:
 			if ok {
 				jm.executeJob(retryJob, id)
