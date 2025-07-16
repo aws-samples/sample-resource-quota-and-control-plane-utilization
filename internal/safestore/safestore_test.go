@@ -244,3 +244,45 @@ func TestStore_RangeEarlyExit(t *testing.T) {
 		t.Errorf("Range early exit: got %d iterations, want 5", count)
 	}
 }
+
+// Test type assertion failures by corrupting internal sync.Map
+func TestStore_TypeAssertionFailures(t *testing.T) {
+	// Test Load with wrong type in sync.Map
+	store := &syncStore[string]{}
+	store.m.Store("key1", 123) // Store int instead of string
+	
+	val, ok := store.Load("key1")
+	if ok || val != "" {
+		t.Errorf("Load type assertion failure: got (%q, %v), want (\"\", false)", val, ok)
+	}
+	
+	// Test LoadOrStore with wrong type in sync.Map
+	store2 := &syncStore[string]{}
+	store2.m.Store("key1", 456) // Store int instead of string
+	
+	val2, loaded := store2.LoadOrStore("key1", "newval")
+	if loaded || val2 != "" {
+		t.Errorf("LoadOrStore type assertion failure: got (%q, %v), want (\"\", false)", val2, loaded)
+	}
+}
+
+// Test Range with invalid key/value types
+func TestStore_RangeInvalidTypes(t *testing.T) {
+	store := &syncStore[string]{}
+	
+	// Manually corrupt sync.Map with non-string key and wrong value type
+	store.m.Store(123, "validValue")     // Invalid key type
+	store.m.Store("validKey", 456)       // Invalid value type
+	store.m.Store("goodKey", "goodVal")  // Valid entry
+	
+	count := 0
+	store.Range(func(key string, val string) bool {
+		count++
+		return true
+	})
+	
+	// Should only process the valid entry
+	if count != 1 {
+		t.Errorf("Range invalid types: got %d valid entries, want 1", count)
+	}
+}

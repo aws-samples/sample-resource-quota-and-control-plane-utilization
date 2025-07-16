@@ -3,6 +3,7 @@ package nau
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -69,7 +70,7 @@ func TestManifest_Finalize(t *testing.T) {
 	manifest := NewManifest(ctx, "test-bucket", "test-key", client, nil, log)
 
 	// Write header and record
-	manifest.WriteHeader([]string{"Id", "Region"})
+	// Header is automatically set in NewManifest
 	record := &ResourceMetadata{Id: "test-id", Region: "us-east-1"}
 	manifest.WriteRecord(record)
 
@@ -98,12 +99,47 @@ func TestManifest_FinalizeError(t *testing.T) {
 	}
 
 	manifest := NewManifest(ctx, "test-bucket", "test-key", client, errorHandler, log)
-	manifest.WriteHeader([]string{"Id"})
+	// Header is automatically set in NewManifest
 
 	err := manifest.Finalize()
 	assert.Error(t, err, "Finalize should fail")
 	assert.Equal(t, "s3 error", err.Error(), "Should return S3 error")
 	assert.NotNil(t, capturedError, "Error handler should be called")
+}
+
+func TestManifest_ContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &mockS3Client{}
+	log := &logger.NoopLogger{}
+
+	manifest := NewManifest(ctx, "test-bucket", "test-key", client, nil, log)
+	
+	// Cancel context
+	cancel()
+	
+	// WriteRecord should immediately return ErrManifestClosed due to fail-fast check
+	record := &ResourceMetadata{Id: "test-id"}
+	err := manifest.WriteRecord(record)
+	assert.Equal(t, ErrManifestClosed, err, "Should return ErrManifestClosed when context cancelled")
+}
+
+func TestManifest_DrainRecords(t *testing.T) {
+	ctx := context.Background()
+	client := &mockS3Client{}
+	log := &logger.NoopLogger{}
+
+	manifest := NewManifest(ctx, "test-bucket", "test-key", client, nil, log)
+	
+	// Add multiple records quickly
+	for i := 0; i < 5; i++ {
+		record := &ResourceMetadata{Id: fmt.Sprintf("test-id-%d", i)}
+		manifest.WriteRecord(record)
+	}
+	
+	// Finalize should drain all records via drainRecords
+	err := manifest.Finalize()
+	assert.NoError(t, err, "Finalize should succeed")
+	assert.True(t, client.putObjectCalled, "PutObject should be called")
 }
 
 func TestGenerateManifestKey(t *testing.T) {
@@ -155,18 +191,3 @@ func TestGenerateManifestKey(t *testing.T) {
 	}
 }
 
-func TestManifest_WriteHeaderMultipleTimes(t *testing.T) {
-	ctx := context.Background()
-	client := &mockS3Client{}
-	log := &logger.NoopLogger{}
-
-	manifest := NewManifest(ctx, "test-bucket", "test-key", client, nil, log)
-
-	// First WriteHeader should work
-	err := manifest.WriteHeader([]string{"Col1", "Col2"})
-	assert.NoError(t, err, "First WriteHeader should succeed")
-
-	// Second WriteHeader should be ignored (no error)
-	err = manifest.WriteHeader([]string{"Col3", "Col4"})
-	assert.NoError(t, err, "Second WriteHeader should be ignored")
-}

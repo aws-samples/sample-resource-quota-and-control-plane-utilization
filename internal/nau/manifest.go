@@ -34,8 +34,6 @@ type ErrorHandler func(error)
 // Manifest provides functionality to buffer CSV records and upload them to S3.
 // Records are accumulated in memory and written as a single CSV file on finalization.
 type Manifest interface {
-	// WriteHeader sets the CSV header columns. Must be called before WriteRecord.
-	WriteHeader(columns []string) error
 	// WriteRecord buffers a CSVRecord for later CSV generation.
 	WriteRecord(rec CSVRecord) error
 	// Finalize generates the complete CSV and uploads it to S3.
@@ -90,18 +88,19 @@ func NewManifest(parentCtx context.Context, bucket, key string, client s3client.
 	return m
 }
 
-// WriteHeader sets the CSV header columns. Subsequent calls are ignored.
-func (m *manifestImpl) WriteHeader(columns []string) error {
-	if m.header != nil {
-		return nil
-	}
-	m.header = append([]string(nil), columns...)
-	return nil
-}
+
 
 // WriteRecord adds a CSV record to the buffer for later processing.
 // This method is thread-safe and uses internal channels for coordination.
 func (m *manifestImpl) WriteRecord(rec CSVRecord) error {
+	// Check context first for fail-fast behavior
+	select {
+	case <-m.ctx.Done():
+		return ErrManifestClosed
+	default:
+	}
+	
+	// Context is not cancelled, try to send record
 	select {
 	case m.recordChan <- rec:
 		return nil
@@ -153,11 +152,6 @@ func (m *manifestImpl) Finalize() error {
 	var finalizeErr error
 
 	m.finalizeOnce.Do(func() {
-		if m.header == nil {
-			finalizeErr = ErrHeaderNotWritten
-			return
-		}
-
 		// Signal shutdown and close the record channel
 		m.cancel() // Cancel manifest context
 		close(m.recordChan)

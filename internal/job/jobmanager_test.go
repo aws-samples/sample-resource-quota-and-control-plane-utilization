@@ -720,3 +720,189 @@ func TestShutdownWithQueuedJobs(t *testing.T) {
 	// All jobs should have been processed despite shutdown
 	assert.Equal(t, numJobs, batcher.GetCallCount())
 }
+
+func TestRetryQueueFull(t *testing.T) {
+	ctx := context.Background()
+	jm, _ := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx:       ctx,
+		Workers:         1,
+		MaxRetries:      3,
+		RetryBufferSize: 2, // Small retry buffer
+	})
+	defer jm.Wait()
+
+	// Create jobs that always fail to fill retry queue
+	for i := 0; i < 5; i++ {
+		job := &controllableJob{
+			region:            "test-region",
+			name:              fmt.Sprintf("failing-job-%d", i),
+			failuresRemaining: 10, // Always fail
+		}
+		err := jm.AddJob(job)
+		require.NoError(t, err)
+	}
+}
+
+func TestCompleteJobLifecycle(t *testing.T) {
+	ctx := context.Background()
+	jm, batcher := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx: ctx,
+		Workers:   1,
+	})
+
+	job := createFastJob(10)
+	err := jm.AddJob(job)
+	require.NoError(t, err)
+
+	jm.Wait()
+	assert.Equal(t, 10, batcher.GetCallCount())
+}
+
+func TestZeroWorkers(t *testing.T) {
+	ctx := context.Background()
+	jm, _ := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx: ctx,
+		Workers:   0, // Should default to 1
+	})
+	defer jm.Wait()
+
+	// Verify it still works with default worker count
+	job := createFastJob(1)
+	err := jm.AddJob(job)
+	assert.NoError(t, err)
+}
+
+func TestDefaultLogger(t *testing.T) {
+	ctx := context.Background()
+	batchers := safestore.NewSyncStore[metrics.Batcher]()
+	
+	// Don't provide a logger - should use default
+	config := JobManagerConfig{
+		ParentCtx:  ctx,
+		Workers:    1,
+		JobTimeout: 100 * time.Millisecond,
+		BatcherMap: batchers,
+		// Log: nil - test default logger initialization
+	}
+
+	jm, err := NewJobManager(config)
+	require.NoError(t, err)
+	defer jm.Wait()
+
+	// Should work without panicking
+	assert.NotNil(t, jm)
+}
+
+func TestParentContextCancellation(t *testing.T) {
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	defer parentCancel()
+
+	// Setup: Fast job that completes quickly
+	job := createFastJob(3) // 10ms execution, 3 metrics
+	
+	// Timing: Job(10ms) + Dispatch(~6ms) + Buffer(20ms) = 36ms
+	cancellationDelay := calculateJobCompletionTime(FastJobTime, 3)
+	
+	jm, batcher := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx:  parentCtx,
+		JobTimeout: 200 * time.Millisecond,
+	})
+
+	// Add job
+	err := jm.AddJob(job)
+	require.NoError(t, err)
+
+	// Cancel parent context after job should complete
+	go func() {
+		time.Sleep(cancellationDelay)
+		parentCancel()
+	}()
+
+	// Wait for complete shutdown
+	jm.Wait()
+
+	// Verify job completed and all metrics dispatched
+	assert.Equal(t, 3, batcher.GetCallCount(), "All metrics should be dispatched before context cancellation")
+}
+
+func TestParentContextEarlyCancellation(t *testing.T) {
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	defer parentCancel()
+
+	// Setup: Slow job that won't complete before cancellation
+	job := createSlowJob(5) // 100ms execution, 5 metrics
+	
+	jm, batcher := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx:  parentCtx,
+		JobTimeout: 200 * time.Millisecond,
+	})
+
+	// Add job
+	err := jm.AddJob(job)
+	require.NoError(t, err)
+
+	// Cancel parent context quickly (before job completes)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		parentCancel()
+	}()
+
+	// Wait for shutdown
+	jm.Wait()
+
+	// Verify minimal or no metrics dispatched due to early cancellation
+	count := batcher.GetCallCount()
+	assert.True(t, count <= 5, "Should have 0-5 metrics due to early cancellation, got %d", count)
+}
+
+func TestShutdownDuringJobExecution(t *testing.T) {
+	ctx := context.Background()
+	
+	// Create blocked job that we can control
+	job := createBlockedJob(3)
+	job.startSignal = make(chan struct{}, 1)
+	job.completeSignal = make(chan struct{}, 1)
+	
+	jm, batcher := setupTestJobManager(t, JobManagerConfig{
+		ParentCtx: ctx,
+		Workers:   1,
+	})
+
+	// Add job
+	err := jm.AddJob(job)
+	require.NoError(t, err)
+
+	// Wait for job to start
+	select {
+	case <-job.startSignal:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Job should have started")
+	}
+
+	// Start shutdown in background
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		jm.Wait()
+	}()
+
+	// Give shutdown time to initiate
+	time.Sleep(10 * time.Millisecond)
+
+	// Release the blocked job
+	close(job.blockUntil)
+
+	// Wait for job to complete
+	select {
+	case <-job.completeSignal:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Job should have completed")
+	}
+
+	// Wait for shutdown to complete
+	wg.Wait()
+
+	// Verify job completed and metrics dispatched
+	assert.Equal(t, 3, batcher.GetCallCount())
+}

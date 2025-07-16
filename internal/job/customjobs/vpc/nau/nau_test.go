@@ -124,3 +124,19 @@ func TestExecute_CalcError(t *testing.T) {
 	assert.Nil(t, mets, "metrics should be nil on error")
 	assert.Equal(t, want, err, "error must propagate from calculator")
 }
+
+func TestExecute_QuotaError(t *testing.T) {
+	want := errors.New("quota service failure")
+	calc := &fakeCalc{out: map[string]int64{"vpc-test": 10}, region: "us-east-1"}
+	j, _ := NewVPCNAUJob(VPCNAUConfig{
+		NauCalculator: calc,
+		ServiceQuotasClient: &fakeQuotaClient{
+			Err: want, // Service quota client returns error
+		},
+		Logger: &logger.NoopLogger{},
+	})
+
+	mets, err := j.Execute(context.Background())
+	assert.Nil(t, mets, "metrics should be nil on quota error")
+	assert.Equal(t, want, err, "error must propagate from service quota client")
+}

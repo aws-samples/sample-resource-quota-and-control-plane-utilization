@@ -91,9 +91,15 @@ func TestValidateFunctions(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:      "valid IAM",
+			name:      "valid IAM iamRoles",
 			validate:  ValidateIAMQuotaMetrics,
 			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "iamRoles"}}},
+			wantError: false,
+		},
+		{
+			name:      "valid IAM oidcProviders",
+			validate:  ValidateIAMQuotaMetrics,
+			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "oidcProviders"}}},
 			wantError: false,
 		},
 		{
@@ -139,39 +145,69 @@ func TestValidateFunctions(t *testing.T) {
 }
 
 func TestValidateQuotaMetricConfig(t *testing.T) {
-	t.Run("valid ec2 config", func(t *testing.T) {
-		cfg := TopLevelServiceConfig{
-			Services: map[string]ServiceConfig{
+	tests := []struct {
+		name      string
+		services  map[string]ServiceConfig
+		wantError bool
+	}{
+		{
+			name: "valid ec2 config",
+			services: map[string]ServiceConfig{
 				"ec2": {QuotaMetrics: []QuotaMetric{{Name: "networkInterfaces"}}},
 			},
-		}
-		err := ValidateQuotaMetricConfig(cfg, nil)
-		if err != nil {
-			t.Errorf("expected no error, got %v", err)
-		}
-	})
-
-	t.Run("invalid ec2 config", func(t *testing.T) {
-		cfg := TopLevelServiceConfig{
-			Services: map[string]ServiceConfig{
+			wantError: false,
+		},
+		{
+			name: "valid eks config",
+			services: map[string]ServiceConfig{
+				"eks": {QuotaMetrics: []QuotaMetric{{Name: "listClusters"}}},
+			},
+			wantError: false,
+		},
+		{
+			name: "valid iam config",
+			services: map[string]ServiceConfig{
+				"iam": {QuotaMetrics: []QuotaMetric{{Name: "iamRoles"}}},
+			},
+			wantError: false,
+		},
+		{
+			name: "valid ebs config",
+			services: map[string]ServiceConfig{
+				"ebs": {QuotaMetrics: []QuotaMetric{{Name: "gp3storage"}}},
+			},
+			wantError: false,
+		},
+		{
+			name: "valid vpc config",
+			services: map[string]ServiceConfig{
+				"vpc": {QuotaMetrics: []QuotaMetric{{Name: "nau"}}},
+			},
+			wantError: false,
+		},
+		{
+			name: "invalid ec2 config",
+			services: map[string]ServiceConfig{
 				"ec2": {QuotaMetrics: []QuotaMetric{{Name: "wrong"}}},
 			},
-		}
-		err := ValidateQuotaMetricConfig(cfg, nil)
-		if err == nil {
-			t.Errorf("expected error")
-		}
-	})
-
-	t.Run("ignore unknown service", func(t *testing.T) {
-		cfg := TopLevelServiceConfig{
-			Services: map[string]ServiceConfig{
+			wantError: true,
+		},
+		{
+			name: "unknown service",
+			services: map[string]ServiceConfig{
 				"unknown": {},
 			},
-		}
-		err := ValidateQuotaMetricConfig(cfg, nil)
-		if err != nil {
-			t.Errorf("expected no error for unknown service")
-		}
-	})
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TopLevelServiceConfig{Services: tt.services}
+			err := ValidateQuotaMetricConfig(cfg, nil)
+			if (err != nil) != tt.wantError {
+				t.Errorf("expected error=%v, got error=%v", tt.wantError, err != nil)
+			}
+		})
+	}
 }

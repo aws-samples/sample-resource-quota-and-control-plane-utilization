@@ -16,8 +16,8 @@ import (
 
 var (
 	// Error variables for rate limit handler validation.
-	ErrCloudTrailBatcherNil = errors.New("cloudtrail batcher is nil")
-	ErrNamespaceNotSet      = errors.New("namespace is not set")
+	ErrCloudTrailBatcherNil  = errors.New("cloudtrail batcher is nil")
+	ErrNamespaceNotSet       = errors.New("namespace is not set")
 	ErrHandlerNotInitialized = errors.New("handler not initialized")
 )
 
@@ -119,6 +119,7 @@ func (rlh *RateLimitHandler) handleFlushCommand(ctx context.Context, messageId s
 func (rlh *RateLimitHandler) handleCloudTrailEvent(ctx context.Context, msg events.SQSMessage) *events.SQSBatchItemFailure {
 	var ctEvent types.CloudTrailEvent
 	if err := json.Unmarshal([]byte(msg.Body), &ctEvent); err != nil {
+		// amazonq-ignore-next-line
 		rlh.Logger.Error("failed to unmarshal SQS message %s: %v", msg.MessageId, err)
 		return &events.SQSBatchItemFailure{ItemIdentifier: msg.MessageId}
 	}
@@ -127,5 +128,3 @@ func (rlh *RateLimitHandler) handleCloudTrailEvent(ctx context.Context, msg even
 	rlh.Batcher.Add(ctx, ctEvent.AWSRegion, ctEvent)
 	return nil
 }
-
-

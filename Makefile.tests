@@ -1,0 +1,63 @@
+# Makefile.tests - Code coverage utilities
+
+# Variables
+COVERAGE_DIR := coverage
+COVERAGE_PROFILE := $(COVERAGE_DIR)/coverage.out
+COVERAGE_HTML := $(COVERAGE_DIR)/coverage.html
+INTERNAL_PACKAGES := ./internal/...
+
+# Default target
+.PHONY: help
+help:
+	@echo "Available targets:"
+	@echo "  test-coverage    - Run tests and generate coverage profile"
+	@echo "  coverage-html    - Generate HTML coverage report"
+	@echo "  coverage-open    - Open HTML coverage report in browser"
+	@echo "  coverage-all     - Run tests, generate HTML, and open report"
+	@echo "  coverage-clean   - Clean coverage files"
+
+# Create coverage directory
+$(COVERAGE_DIR):
+	@mkdir -p $(COVERAGE_DIR)
+
+# Run tests with coverage for internal packages only
+.PHONY: test-coverage
+test-coverage: $(COVERAGE_DIR)
+	@echo "Running tests with coverage for internal packages..."
+	go test -coverprofile=$(COVERAGE_PROFILE) $(INTERNAL_PACKAGES)
+	@echo "Coverage profile generated: $(COVERAGE_PROFILE)"
+
+# Generate HTML coverage report
+.PHONY: coverage-html
+coverage-html: $(COVERAGE_PROFILE)
+	@echo "Generating HTML coverage report..."
+	go tool cover -html=$(COVERAGE_PROFILE) -o $(COVERAGE_HTML)
+	@echo "HTML coverage report generated: $(COVERAGE_HTML)"
+
+# Open HTML coverage report in default browser
+.PHONY: coverage-open
+coverage-open: $(COVERAGE_HTML)
+	@echo "Opening coverage report in browser..."
+	@if command -v open >/dev/null 2>&1; then \
+		open $(COVERAGE_HTML); \
+	elif command -v xdg-open >/dev/null 2>&1; then \
+		xdg-open $(COVERAGE_HTML); \
+	else \
+		echo "Cannot auto-open browser. Please open $(COVERAGE_HTML) manually"; \
+	fi
+
+# Combined target: run tests, generate HTML, and open
+.PHONY: coverage-all
+coverage-all: test-coverage coverage-html coverage-open
+	@echo "Coverage analysis complete!"
+
+# Clean coverage files
+.PHONY: coverage-clean
+coverage-clean:
+	@echo "Cleaning coverage files..."
+	@rm -rf $(COVERAGE_DIR)
+	@echo "Coverage files cleaned"
+
+# Ensure HTML depends on profile
+$(COVERAGE_HTML): $(COVERAGE_PROFILE)
+	@$(MAKE) -f Makefile.tests coverage-html

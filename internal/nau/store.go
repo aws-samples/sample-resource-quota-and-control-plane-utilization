@@ -14,8 +14,6 @@ type AccountNauStore interface {
 	RangeVPCs(fn func(vpcID string, vpc *VPCNAU) bool)
 	// Close finalizes the store and uploads manifest data.
 	Close() error
-	// writeHeader initializes the CSV header for manifest export.
-	writeHeader()
 }
 
 // accountNauStore implements AccountNauStore with thread-safe storage and manifest generation.
@@ -26,13 +24,10 @@ type accountNauStore struct {
 
 // NewAccountNauStore creates a new account-level NAU store with manifest support.
 func NewAccountNauStore(m Manifest) AccountNauStore {
-	store := &accountNauStore{
+	return &accountNauStore{
 		vpcs: safestore.NewSyncStore[*VPCNAU](),
 		m:    m,
 	}
-
-	store.writeHeader()
-	return store
 }
 
 // AddRecord processes a NAU record by updating VPC counters and writing to manifest.
@@ -55,11 +50,7 @@ func (a *accountNauStore) Close() error {
 	return a.m.Finalize()
 }
 
-// writeHeader initializes the CSV header for manifest export.
-func (a *accountNauStore) writeHeader() {
-	rm := ResourceMetadata{}
-	a.m.WriteHeader(rm.Header())
-}
+
 
 // ResourceStats maintains thread-safe counters for NAU resource statistics.
 type ResourceStats struct {
