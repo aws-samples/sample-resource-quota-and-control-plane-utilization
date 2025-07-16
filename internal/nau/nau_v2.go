@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -21,6 +22,19 @@ type NauCalculatorV2 interface {
 	GetRegion() string
 }
 
+// eniJob represents work to be processed by worker pool.
+type eniJob struct {
+	eni    ec2Types.NetworkInterface
+	vpcId  string
+	region string
+}
+
+// eniResult contains the output from processing an ENI.
+type eniResult struct {
+	records []NauRecord
+	err     error
+}
+
 // nauCalculatorV2Impl implements NAU calculation using EC2 network interface analysis.
 type nauCalculatorV2Impl struct {
 	ctx      context.Context     // Context for AWS API calls
@@ -30,18 +44,78 @@ type nauCalculatorV2Impl struct {
 	logger   logger.Logger       // Logger instance
 
 	region string // AWS region being processed
+
+	// Worker pool components
+	jobs        chan eniJob
+	results     chan eniResult
+	workerCount int
+	workerWg    sync.WaitGroup
 }
 
 // NewNauCalculatorV2 creates a new NAU calculator instance for the specified region.
 func NewNauCalculatorV2(ctx context.Context, ec2 ec2client.Ec2Client, nauStore AccountNauStore, logger logger.Logger) NauCalculatorV2 {
+	calc := &nauCalculatorV2Impl{
+		ctx:         ctx,
+		ec2:         ec2,
+		nauStore:    nauStore,
+		logger:      logger,
+		wt:          NewNauWeightTable(),
+		region:      ec2.GetRegion(),
+		workerCount: 20,
+		jobs:        make(chan eniJob, 100),
+		results:     make(chan eniResult, 1000),
+	}
 
-	return &nauCalculatorV2Impl{
-		ctx:      ctx,
-		ec2:      ec2,
-		nauStore: nauStore,
-		logger:   logger,
-		wt:       NewNauWeightTable(),
-		region:   ec2.GetRegion(),
+	calc.startWorkerPool()
+	return calc
+}
+
+// startWorkerPool initializes and starts the worker goroutines.
+func (n *nauCalculatorV2Impl) startWorkerPool() {
+	// Start workers
+	for i := 0; i < n.workerCount; i++ {
+		n.workerWg.Add(1)
+		go n.worker()
+	}
+	
+	// Start result collector
+	go n.collectResults()
+}
+
+// worker processes ENI jobs from the jobs channel.
+func (n *nauCalculatorV2Impl) worker() {
+	defer n.workerWg.Done()
+	for job := range n.jobs {
+		convertedEniType := toNetworkInterfaceType(job.eni.InterfaceType, n.logger)
+		records, err := calculateNauForEni(job.eni, convertedEniType, n.wt, job.region)
+		
+		n.results <- eniResult{
+			records: records,
+			err:     err,
+		}
+	}
+}
+
+// collectResults processes results from workers and adds records to the store.
+func (n *nauCalculatorV2Impl) collectResults() {
+	for result := range n.results {
+		if result.err != nil {
+			if errors.Is(result.err, errUnsupportedEni) {
+				logUnsupportedEniType(result.err, n.logger)
+				continue
+			}
+			if errors.Is(result.err, errNonAttachedEni) {
+				logNonAttachedEni(result.err, n.logger)
+				continue
+			}
+			n.handleError(result.err)
+			continue
+		}
+		
+		// Add records to store - manifest handles thread-safety internally
+		for _, record := range result.records {
+			n.nauStore.AddRecord(record)
+		}
 	}
 }
 
@@ -73,6 +147,12 @@ func (n *nauCalculatorV2Impl) CalculateNau() (map[string]int64, error) {
 		}
 	}
 
+	// Wait for all workers to complete
+	close(n.jobs)
+	n.workerWg.Wait()
+	close(n.results)
+	// Result collector will finish when results channel is drained
+
 	n.logger.Info("Completed calculating Network Address Units for all VPC's in %s", n.region)
 	totals := make(map[string]int64)
 	n.nauStore.RangeVPCs(func(vpcId string, vpc *VPCNAU) bool {
@@ -96,7 +176,7 @@ func (n *nauCalculatorV2Impl) handleError(err error) error {
 }
 
 // calculateNauPerVpc processes all network interfaces in a specific VPC
-// and calculates their NAU contributions.
+// by sending them to the worker pool for parallel processing.
 func (n *nauCalculatorV2Impl) calculateNauPerVpc(vpcId string) error {
 	p := ec2.NewDescribeNetworkInterfacesPaginator(n.ec2, &ec2.DescribeNetworkInterfacesInput{
 		Filters: []ec2Types.Filter{
@@ -113,25 +193,12 @@ func (n *nauCalculatorV2Impl) calculateNauPerVpc(vpcId string) error {
 			return err
 		}
 
+		// Send ENIs to worker pool for parallel processing
 		for _, eni := range output.NetworkInterfaces {
-			convertedEniType := toNetworkInterfaceType(eni.InterfaceType, n.logger)
-			records, err := calculateNauForEni(eni, convertedEniType, n.wt, n.region)
-			if err != nil {
-				if errors.Is(err, errUnsupportedEni) {
-					logUnsupportedEniType(err, n.logger)
-					continue
-				}
-				if errors.Is(err, errNonAttachedEni) {
-					logNonAttachedEni(err, n.logger)
-					continue
-				}
-				return err
-			}
-			for _, r := range records {
-				err := n.nauStore.AddRecord(r)
-				if err != nil {
-					n.handleError(err)
-				}
+			n.jobs <- eniJob{
+				eni:    eni,
+				vpcId:  vpcId,
+				region: n.region,
 			}
 		}
 	}

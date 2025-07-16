@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -48,6 +49,12 @@ type manifestImpl struct {
 	errHandler ErrorHandler      // Error handling callback
 	log        logger.Logger     // Logger instance
 	finalized  bool              // Tracks finalization state
+
+	// Thread-safety components
+	recordChan  chan CSVRecord
+	done        chan struct{}
+	processorWg sync.WaitGroup
+	startOnce   sync.Once
 }
 
 // NewManifest creates a new Manifest instance for CSV generation and S3 upload.
@@ -56,13 +63,15 @@ func NewManifest(ctx context.Context, bucket, key string, client s3client.S3Clie
 	log.Debug("creating new manifest for S3 upload: bucket=%s key=%s", bucket, key)
 	metadata := ResourceMetadata{}
 	return &manifestImpl{
-		ctx:        ctx,
-		bucket:     bucket,
-		key:        key,
-		client:     client,
-		errHandler: errHandler,
-		header:     metadata.Header(),
-		log:        log,
+		ctx:         ctx,
+		bucket:      bucket,
+		key:         key,
+		client:      client,
+		errHandler:  errHandler,
+		header:      metadata.Header(),
+		log:         log,
+		recordChan:  make(chan CSVRecord, 1000),
+		done:        make(chan struct{}),
 	}
 }
 
@@ -77,16 +86,43 @@ func (m *manifestImpl) WriteHeader(columns []string) error {
 }
 
 // WriteRecord adds a CSV record to the buffer for later processing.
-// Returns ErrHeaderNotWritten if WriteHeader hasn't been called first.
+// This method is thread-safe and uses internal channels for coordination.
 func (m *manifestImpl) WriteRecord(rec CSVRecord) error {
-	if m.header == nil {
-		m.log.Warn("WriteRecord called before WriteHeader")
-		return ErrHeaderNotWritten
-	}
-	vals := append([]string(nil), rec.Values()...)
-	m.records = append(m.records, vals)
-	m.log.Debug("buffered record: %v", vals)
+	m.ensureProcessorStarted()
+	m.recordChan <- rec
 	return nil
+}
+
+// ensureProcessorStarted starts the record processor goroutine on first use.
+func (m *manifestImpl) ensureProcessorStarted() {
+	m.startOnce.Do(func() {
+		m.processorWg.Add(1)
+		go m.recordProcessor()
+	})
+}
+
+// recordProcessor handles records sequentially in a separate goroutine.
+func (m *manifestImpl) recordProcessor() {
+	defer m.processorWg.Done()
+	for {
+		select {
+		case rec := <-m.recordChan:
+			vals := append([]string(nil), rec.Values()...)
+			m.records = append(m.records, vals)
+			m.log.Debug("buffered record: %v", vals)
+		case <-m.done:
+			// Drain remaining records
+			for {
+				select {
+				case rec := <-m.recordChan:
+					vals := append([]string(nil), rec.Values()...)
+					m.records = append(m.records, vals)
+				default:
+					return
+				}
+			}
+		}
+	}
 }
 
 // Finalize generates the complete CSV from buffered records and uploads to S3.
@@ -98,6 +134,11 @@ func (m *manifestImpl) Finalize() error {
 	if m.header == nil {
 		return ErrHeaderNotWritten
 	}
+
+	// Stop the processor and wait for it to finish
+	close(m.done)
+	m.processorWg.Wait()
+
 
 	// Build CSV in memory
 	buf := &bytes.Buffer{}
