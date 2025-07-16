@@ -5,7 +5,6 @@ package metrics
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 
@@ -99,16 +98,16 @@ type MetricsBatcherConfig struct {
 // Validate checks if the configuration is valid
 func (cfg MetricsBatcherConfig) Validate() error {
 	if strings.TrimSpace(cfg.Namespace) == "" {
-		return fmt.Errorf("%w: %s", ErrInvalidConfig, ErrEmptyNamespace.Error())
+		return ErrEmptyNamespace
 	}
 	if strings.TrimSpace(cfg.Region) == "" {
-		return fmt.Errorf("%w: %s", ErrInvalidConfig, ErrEmptyRegion.Error())
+		return ErrEmptyRegion
 	}
 	if cfg.EmfFlusher == nil {
-		return fmt.Errorf("%w: %s", ErrInvalidConfig, ErrNilEMFFlusher.Error())
+		return ErrNilEMFFlusher
 	}
 	if cfg.MaxCount < 0 || cfg.MaxBytes < 0 {
-		return fmt.Errorf("%w: %s", ErrInvalidConfig, ErrInvalidThreshold.Error())
+		return ErrInvalidThreshold
 	}
 	return nil
 }
@@ -130,7 +129,7 @@ func NewMetricsBatcher(cfg MetricsBatcherConfig) (Batcher, error) {
 		cfg.ThresholdChecker = DefaultThresholdChecker{}
 	}
 
-	return &MetricsBatcher{
+	mb := &MetricsBatcher{
 		namespace:        cfg.Namespace,
 		logGroup:         cfg.LogGroup,
 		logStream:        cfg.LogStream,
@@ -142,7 +141,9 @@ func NewMetricsBatcher(cfg MetricsBatcherConfig) (Batcher, error) {
 		emfBuilder:       cfg.EMFBuilder,
 		thresholdChecker: cfg.ThresholdChecker,
 		records:          make([]builder.EMFRecord, 0),
-	}, nil
+	}
+	mb.logger.Info("MetricsBatcher initialized for namespace %s region %s", cfg.Namespace, cfg.Region)
+	return mb, nil
 }
 
 // Add converts a CloudWatch metric to an EMF record, adds it to the batch,
@@ -173,7 +174,7 @@ func (mb *MetricsBatcher) Add(ctx context.Context, m types.CloudWatchMetric) {
 	// Pre-flush if needed
 	if mb.thresholdChecker.ShouldFlush(currCount, currSize, recSize, mb.maxCount, mb.maxBytes) {
 		mb.mu.Unlock()
-		mb.logger.Info("MetricsBatcher: pre-threshold reached (count %d/%d, size %d/%d), flushing", currCount+1, mb.maxCount, currSize+recSize, mb.maxBytes)
+		mb.logger.Info("pre-threshold reached (count %d/%d, size %d/%d), flushing", currCount+1, mb.maxCount, currSize+recSize, mb.maxBytes)
 		mb.FlushAll(ctx)
 		mb.mu.Lock()
 	}
@@ -182,6 +183,7 @@ func (mb *MetricsBatcher) Add(ctx context.Context, m types.CloudWatchMetric) {
 	mb.records = append(mb.records, rec)
 	mb.count++
 	mb.size += recSize
+	mb.logger.Debug("added metric %s: count=%d size=%d", m.Name, mb.count, mb.size)
 	mb.mu.Unlock()
 }
 
@@ -196,8 +198,10 @@ func (mb *MetricsBatcher) FlushAll(ctx context.Context) {
 		return
 	}
 
+	mb.logger.Info("flushing %d EMF records to CloudWatch", len(batch))
 	if err := mb.emfFlusher.Flush(ctx, mb.region, batch); err != nil {
-		mb.logger.Error("MetricsBatcher: %v: %v", ErrFlushFailed, err)
+		mb.logger.Error("flush failed: %v", err)
+		return
 	}
 
 	mb.mu.Lock()
@@ -214,7 +218,10 @@ func BuildDimensions(metadata map[string]string) [][]string {
 	}
 	dims := make([][]string, 0, len(metadata))
 	for k, v := range metadata {
-		dims = append(dims, []string{k, v})
+		pair := make([]string, 2)
+		pair[0] = k
+		pair[1] = v
+		dims = append(dims, pair)
 	}
 	return dims
 }

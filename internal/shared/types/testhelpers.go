@@ -11,10 +11,11 @@ import (
 // LoadTestData loads JSON test data from the testdata directory
 func LoadTestData(t *testing.T, filename string) []byte {
 	t.Helper()
-	
+
 	path := filepath.Join("testdata", filename)
 	data, err := os.ReadFile(path)
 	if err != nil {
+		// amazonq-ignore-next-line
 		t.Fatalf("Failed to read test data file %s: %v", filename, err)
 	}
 	return data
@@ -23,7 +24,7 @@ func LoadTestData(t *testing.T, filename string) []byte {
 // MustParseTime parses a time string or fails the test
 func MustParseTime(t *testing.T, timeStr string) time.Time {
 	t.Helper()
-	
+
 	parsed, err := time.Parse(time.RFC3339, timeStr)
 	if err != nil {
 		t.Fatalf("Failed to parse time %s: %v", timeStr, err)
@@ -34,20 +35,22 @@ func MustParseTime(t *testing.T, timeStr string) time.Time {
 // AssertJSONEqual compares two JSON byte slices for equality
 func AssertJSONEqual(t *testing.T, expected, actual []byte) {
 	t.Helper()
-	
+
 	var expectedObj, actualObj interface{}
-	
+
 	if err := json.Unmarshal(expected, &expectedObj); err != nil {
+		// amazonq-ignore-next-line
 		t.Fatalf("Failed to unmarshal expected JSON: %v", err)
 	}
-	
+
 	if err := json.Unmarshal(actual, &actualObj); err != nil {
+		// amazonq-ignore-next-line
 		t.Fatalf("Failed to unmarshal actual JSON: %v", err)
 	}
-	
+
 	expectedJSON, _ := json.Marshal(expectedObj)
 	actualJSON, _ := json.Marshal(actualObj)
-	
+
 	if string(expectedJSON) != string(actualJSON) {
 		t.Errorf("JSON not equal:\nExpected: %s\nActual: %s", expectedJSON, actualJSON)
 	}

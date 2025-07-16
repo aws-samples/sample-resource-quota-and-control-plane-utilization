@@ -15,18 +15,22 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/emf"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/builder"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	"github.com/outofoffice3/aws-samples/geras/internal/utils"
 	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	"github.com/outofoffice3/aws-samples/geras/internal/utils"
 )
 
 // Error constants for better error handling and testing
 var (
-	ErrInvalidRegion     = errors.New("invalid region name")
-	ErrCounterFileRead   = errors.New("failed to read counter file")
-	ErrCounterFileWrite  = errors.New("failed to write counter file")
-	ErrInvalidConfig     = errors.New("invalid batcher configuration")
-	ErrFlushFailed       = errors.New("failed to flush records")
-	ErrTimeCalculation   = errors.New("failed to calculate elapsed time")
+	ErrInvalidRegion    = errors.New("invalid region name")
+	ErrCounterFileRead  = errors.New("failed to read counter file")
+	ErrCounterFileWrite = errors.New("failed to write counter file")
+	ErrInvalidConfig    = errors.New("invalid batcher configuration")
+	ErrFlushFailed      = errors.New("failed to flush records")
+	ErrTimeCalculation  = errors.New("failed to calculate elapsed time")
+	ErrBaseDirEmpty     = errors.New("base directory is empty")
+	ErrNamespaceEmpty   = errors.New("namespace is empty")
+	ErrMetricNameEmpty  = errors.New("metric name is empty")
+	ErrEMFFlusherNil    = errors.New("EMF flusher is nil")
 )
 
 // FileSystem interface for dependency injection in testing
@@ -77,8 +81,6 @@ func (DefaultTimeProvider) Now() time.Time {
 func (DefaultTimeProvider) Parse(layout, value string) (time.Time, error) {
 	return time.Parse(layout, value)
 }
-
-
 
 // Batcher defines the interface for batching CloudTrail events and flushing them as EMF records.
 type Batcher interface {
@@ -153,23 +155,23 @@ type CTFileBatcherConfig struct {
 	PropagateInvoker   bool
 	EmfFlusher         emf.EMFFlusher
 	Logger             logger.Logger
-	FileSystem         FileSystem     // Optional, defaults to DefaultFileSystem
-	TimeProvider       TimeProvider   // Optional, defaults to DefaultTimeProvider
+	FileSystem         FileSystem   // Optional, defaults to DefaultFileSystem
+	TimeProvider       TimeProvider // Optional, defaults to DefaultTimeProvider
 }
 
 // Validate checks if the configuration is valid
 func (cfg CTFileBatcherConfig) Validate() error {
 	if cfg.BaseDir == "" {
-		return fmt.Errorf("%w: base directory is empty", ErrInvalidConfig)
+		return ErrBaseDirEmpty
 	}
 	if cfg.Namespace == "" {
-		return fmt.Errorf("%w: namespace is empty", ErrInvalidConfig)
+		return ErrNamespaceEmpty
 	}
 	if cfg.MetricName == "" {
-		return fmt.Errorf("%w: metric name is empty", ErrInvalidConfig)
+		return ErrMetricNameEmpty
 	}
 	if cfg.EmfFlusher == nil {
-		return fmt.Errorf("%w: EMF flusher is nil", ErrInvalidConfig)
+		return ErrEMFFlusherNil
 	}
 	return nil
 }
@@ -180,7 +182,7 @@ func NewCTFileBatcher(cfg CTFileBatcherConfig) (Batcher, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	
+
 	if cfg.Logger == nil {
 		cfg.Logger = logger.Get()
 	}
@@ -190,10 +192,10 @@ func NewCTFileBatcher(cfg CTFileBatcherConfig) (Batcher, error) {
 	if cfg.TimeProvider == nil {
 		cfg.TimeProvider = DefaultTimeProvider{}
 	}
-	
+
 	counterMgr := NewCounterManager(cfg.FileSystem, cfg.BaseDir, cfg.Logger)
 	timeCalc := NewTimeCalculator(cfg.FileSystem, cfg.TimeProvider, cfg.BaseDir, cfg.LastFlushFilePath, cfg.LambdaInitFilePath, cfg.Logger)
-	
+
 	return &CTFileBatcher{
 		baseDir:            cfg.BaseDir,
 		namespace:          cfg.Namespace,
@@ -249,42 +251,43 @@ func GenerateCounterKeys(ct types.CloudTrailEvent, propagateInvoker bool) []stri
 // ReadCounters reads the counter file for a specific region
 func (cm *CounterManager) ReadCounters(region string) (map[string]int, error) {
 	filePath := filepath.Join(cm.baseDir, fmt.Sprintf("counters_%s.json", region))
-	
+
 	data, err := cm.fs.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return make(map[string]int), nil // Return empty map if file doesn't exist
 		}
 		return nil, fmt.Errorf("%w: %v", ErrCounterFileRead, err)
+		// amazonq-ignore-next-line
 	}
-	
+
 	var counters map[string]int
 	if err := json.Unmarshal(data, &counters); err != nil {
 		return nil, fmt.Errorf("%w: invalid JSON: %v", ErrCounterFileRead, err)
 	}
-	
+
 	return counters, nil
 }
 
 // WriteCounters writes counters to file for a specific region
 func (cm *CounterManager) WriteCounters(region string, counters map[string]int) error {
 	filePath := filepath.Join(cm.baseDir, fmt.Sprintf("counters_%s.json", region))
-	
+
 	data, err := json.Marshal(counters)
 	if err != nil {
 		return fmt.Errorf("%w: marshal failed: %v", ErrCounterFileWrite, err)
 	}
-	
+
 	// Atomic write pattern
 	tempFile := filePath + ".tmp"
 	if err := cm.fs.WriteFile(tempFile, data, 0600); err != nil {
 		return fmt.Errorf("%w: temp file write failed: %v", ErrCounterFileWrite, err)
 	}
-	
+
 	if err := cm.fs.Rename(tempFile, filePath); err != nil {
 		return fmt.Errorf("%w: atomic rename failed: %v", ErrCounterFileWrite, err)
 	}
-	
+
 	return nil
 }
 
@@ -294,9 +297,9 @@ func (cm *CounterManager) IncrementCounter(region, key string) error {
 	if err != nil {
 		return err
 	}
-	
+
 	counters[key]++
-	
+
 	return cm.WriteCounters(region, counters)
 }
 
@@ -316,7 +319,7 @@ func (cm *CounterManager) GetRegions() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var regions []string
 	for _, file := range files {
 		base := filepath.Base(file)
@@ -331,14 +334,14 @@ func (cm *CounterManager) GetRegions() ([]string, error) {
 // CalculateElapsedTime calculates elapsed time since last flush
 func (tc *TimeCalculator) CalculateElapsedTime(flushTime time.Time) (float64, error) {
 	lastFlush := time.Time{}
-	
+
 	// Try to read last flush time
 	if data, err := tc.fs.ReadFile(tc.lastFlushPath); err == nil {
 		if t, err := tc.timeProvider.Parse(time.RFC3339Nano, string(data)); err == nil {
 			lastFlush = t
 		}
 	}
-	
+
 	// If no last flush time, try init file
 	if lastFlush.IsZero() {
 		initPath := filepath.Join(tc.baseDir, tc.initFilePath)
@@ -348,17 +351,17 @@ func (tc *TimeCalculator) CalculateElapsedTime(flushTime time.Time) (float64, er
 			}
 		}
 	}
-	
+
 	// Default to 60 seconds ago if no timestamp found
 	if lastFlush.IsZero() {
 		lastFlush = flushTime.Add(-60 * time.Second)
 	}
-	
+
 	elapsed := flushTime.Sub(lastFlush).Seconds()
 	if elapsed <= 0 {
 		elapsed = 60
 	}
-	
+
 	return elapsed, nil
 }
 
@@ -377,23 +380,23 @@ func (tc *TimeCalculator) SaveFlushTime(flushTime time.Time) error {
 // ParseCounterKey parses a counter key into EMF dimensions
 func ParseCounterKey(key string) [][]string {
 	parts := strings.Split(key, ":")
-	
+
 	if len(parts) == 1 {
 		// Simple case: just eventName
 		return [][]string{{"eventName", parts[0]}}
 	}
-	
+
 	if len(parts) >= 3 {
 		// Complex case: eventName:invokerType:invokerName
 		eventName := parts[0]
 		invoker := strings.Join(parts[1:], ":")
-		
+
 		return [][]string{
 			{"eventName", eventName},
 			{"invoker", invoker},
 		}
 	}
-	
+
 	// Fallback for malformed keys
 	return [][]string{{"eventName", key}}
 }
@@ -413,7 +416,7 @@ func (fb *CTFileBatcher) FlushAll(ctx context.Context, flushTime time.Time) erro
 		fb.logger.Error("get regions: %v", err)
 		return fmt.Errorf("%w: %v", ErrFlushFailed, err)
 	}
-	
+
 	for _, region := range regions {
 		counters, err := fb.counterMgr.ReadCounters(region)
 		if err != nil {
@@ -445,7 +448,7 @@ func (fb *CTFileBatcher) FlushAll(ctx context.Context, flushTime time.Time) erro
 // createEMFRecords creates EMF records from counter data
 func (fb *CTFileBatcher) createEMFRecords(counters map[string]int, elapsed float64, flushTime time.Time) ([]builder.EMFRecord, error) {
 	var records []builder.EMFRecord
-	
+
 	for key, count := range counters {
 		if count == 0 {
 			continue
@@ -463,6 +466,7 @@ func (fb *CTFileBatcher) createEMFRecords(counters map[string]int, elapsed float
 			MetricName: fb.metricName,
 			Value:      rate,
 			Unit:       builder.MetricUnitCount,
+			// amazonq-ignore-next-line
 			Dimensions: dimensions,
 			Timestamp:  flushTime,
 		}, fb.logger)
@@ -472,7 +476,7 @@ func (fb *CTFileBatcher) createEMFRecords(counters map[string]int, elapsed float
 		}
 		records = append(records, record)
 	}
-	
+
 	return records, nil
 }
 

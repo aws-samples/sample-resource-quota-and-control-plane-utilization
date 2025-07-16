@@ -32,6 +32,7 @@ var (
 	ErrContextCancelled   = errors.New("context is already cancelled")
 	ErrMaxRetriesExceeded = errors.New("job exceeded maximum retry attempts")
 	ErrJobManagerShutdown = errors.New("job manager is shutting down")
+	ErrJobQueueFull       = errors.New("primary job queue full")
 )
 
 // Job represents a unit of work that can be executed by the job manager.
@@ -176,7 +177,7 @@ func (jm *jobManager) AddJob(job Job) error {
 		jm.log.Debug("enqueued job %s (region=%s)", job.GetJobName(), job.GetRegion())
 		return nil
 	default:
-		return fmt.Errorf("primary job queue full")
+		return ErrJobQueueFull
 	}
 }
 

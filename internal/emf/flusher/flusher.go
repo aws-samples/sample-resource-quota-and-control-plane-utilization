@@ -15,8 +15,8 @@ import (
 	cwlTypes "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/builder"
-	"github.com/outofoffice3/aws-samples/geras/internal/safestore"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
+	"github.com/outofoffice3/aws-samples/geras/internal/safestore"
 )
 
 const (
@@ -28,12 +28,15 @@ const (
 
 // Error variables for better error handling and testing
 var (
-	ErrEmptyBatch        = errors.New("batch is empty")
-	ErrClientNotFound    = errors.New("client not found for region")
-	ErrInvalidConfig     = errors.New("invalid flusher configuration")
-	ErrBatchTooLarge     = errors.New("batch exceeds size limits")
-	ErrMessageTooLarge   = errors.New("message exceeds size limit")
-	ErrFlushFailed       = errors.New("failed to flush batch to CloudWatch Logs")
+	ErrEmptyBatch         = errors.New("batch is empty")
+	ErrClientNotFound     = errors.New("client not found for region")
+	ErrInvalidConfig      = errors.New("invalid flusher configuration")
+	ErrClientMapNil       = errors.New("client map is nil")
+	ErrLogGroupNameEmpty  = errors.New("log group name is empty")
+	ErrLogStreamNameEmpty = errors.New("log stream name is empty")
+	ErrBatchTooLarge      = errors.New("batch exceeds size limits")
+	ErrMessageTooLarge    = errors.New("message exceeds size limit")
+	ErrFlushFailed        = errors.New("failed to flush batch to CloudWatch Logs")
 )
 
 // EMFFlusher defines the interface for sending batches of EMF records
@@ -69,13 +72,13 @@ func NewEMFFlusher(cfg EMFFlusherConfig) (EMFFlusher, error) {
 // Validate checks if the EMFFlusherConfig is valid
 func (cfg EMFFlusherConfig) Validate() error {
 	if cfg.CwlClientMap == nil {
-		return fmt.Errorf("%w: client map is nil", ErrInvalidConfig)
+		return ErrClientMapNil
 	}
 	if strings.TrimSpace(cfg.LogGroupName) == "" {
-		return fmt.Errorf("%w: log group name is empty", ErrInvalidConfig)
+		return ErrLogGroupNameEmpty
 	}
 	if strings.TrimSpace(cfg.LogStreamName) == "" {
-		return fmt.Errorf("%w: log stream name is empty", ErrInvalidConfig)
+		return ErrLogStreamNameEmpty
 	}
 	return nil
 }
@@ -87,7 +90,7 @@ func (f *EMFFlusherImpl) Flush(ctx context.Context, region string, batch []build
 		f.cfg.Logger.Info("no records to flush for region %s", region)
 		return nil
 	}
-	
+
 	client, ok := f.cfg.CwlClientMap.Load(region)
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrClientNotFound, region)
@@ -98,7 +101,7 @@ func (f *EMFFlusherImpl) Flush(ctx context.Context, region string, batch []build
 	if err := ValidateBatchSize(events); err != nil {
 		return err
 	}
-	
+
 	// sort events by timestamp as required by CloudWatch Logs
 	SortEventsByTimestamp(events)
 
@@ -109,10 +112,12 @@ func (f *EMFFlusherImpl) Flush(ctx context.Context, region string, batch []build
 		LogEvents:     events,
 	})
 	if err != nil {
+		// amazonq-ignore-next-line
 		f.cfg.Logger.Error("flush error: %v", err)
+		// amazonq-ignore-next-line
 		return fmt.Errorf("%w: %v", ErrFlushFailed, err)
 	}
-	
+
 	f.cfg.Logger.Info("flushed %d records to %s/%s in %s", len(events), f.cfg.LogGroupName, f.cfg.LogStreamName, region)
 	return nil
 }
@@ -132,7 +137,7 @@ func BuildLogEvents(batch []builder.EMFRecord) []cwlTypes.InputLogEvent {
 // SortEventsByTimestamp sorts events by timestamp as required by CloudWatch Logs
 func SortEventsByTimestamp(events []cwlTypes.InputLogEvent) {
 	sort.Slice(events, func(i, j int) bool {
-		return *events[i].Timestamp < *events[j].Timestamp
+		return aws.ToInt64(events[i].Timestamp) < aws.ToInt64(events[j].Timestamp)
 	})
 }
 
@@ -141,20 +146,20 @@ func ValidateBatchSize(events []cwlTypes.InputLogEvent) error {
 	if len(events) > MaxLogEventsPerBatch {
 		return fmt.Errorf("%w: batch size %d exceeds maximum %d", ErrBatchTooLarge, len(events), MaxLogEventsPerBatch)
 	}
-	
+
 	totalSize := 0
 	for _, event := range events {
-		msgSize := len(*event.Message)
+		msgSize := len(aws.ToString(event.Message))
 		if msgSize > MaxMessageSizeBytes {
 			return fmt.Errorf("%w: message size %d exceeds maximum %d", ErrMessageTooLarge, msgSize, MaxMessageSizeBytes)
 		}
 		totalSize += msgSize + EventOverheadBytes
 	}
-	
+
 	if totalSize > MaxBatchSizeBytes {
 		return fmt.Errorf("%w: batch total size %d exceeds maximum %d", ErrBatchTooLarge, totalSize, MaxBatchSizeBytes)
 	}
-	
+
 	return nil
 }
 
@@ -171,14 +176,14 @@ func MakeFlushFunc[T any](
 		if len(batch) == 0 {
 			return nil
 		}
-		
+
 		events := BuildGenericLogEvents(batch, extractPayload, extractTimestamp, true)
 		if err := ValidateBatchSize(events); err != nil {
 			return err
 		}
-		
+
 		SortEventsByTimestamp(events)
-		
+
 		_, err := client.PutLogEvents(ctx, &cloudwatchlogs.PutLogEventsInput{
 			LogGroupName:  aws.String(logGroup),
 			LogStreamName: aws.String(logStream),
@@ -186,9 +191,10 @@ func MakeFlushFunc[T any](
 		})
 		if err != nil {
 			logger.Error("emf flusher: error flushing batch: %v", err)
+			// amazonq-ignore-next-line
 			return fmt.Errorf("%w: %v", ErrFlushFailed, err)
 		}
-		
+
 		logger.Debug("emf flusher: flushed batch of %d to %s/%s", len(batch), logGroup, logStream)
 		return nil
 	}

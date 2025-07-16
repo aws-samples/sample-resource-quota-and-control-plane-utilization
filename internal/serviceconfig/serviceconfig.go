@@ -32,7 +32,7 @@ type TopLevelServiceConfig struct {
 // Returns the parsed configuration or an error if reading or parsing fails.
 func LoadConfigFromFile(filePath string, logger applogger.Logger) (*TopLevelServiceConfig, error) {
 	if logger == nil {
-		logger = &applogger.NoopLogger{}
+		logger = applogger.Get()
 	}
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -137,7 +137,7 @@ func ValidateVPCQuotaMetrics(service ServiceConfig) error {
 // Returns an error if any service has invalid quota metric configurations.
 func ValidateQuotaMetricConfig(cfg TopLevelServiceConfig, logger applogger.Logger) error {
 	if logger == nil {
-		logger = &applogger.NoopLogger{}
+		logger = applogger.Get()
 	}
 	for serviceName, serviceCfg := range cfg.Services {
 		switch serviceName {

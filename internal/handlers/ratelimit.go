@@ -50,12 +50,10 @@ func NewRateLimitHandler(config RateLimitHandlerConfig) (*RateLimitHandler, erro
 	}
 	// validate batcher
 	if config.Batcher == nil {
-		config.Logger.Error("Handler error: %v", ErrCloudTrailBatcherNil)
 		return nil, ErrCloudTrailBatcherNil
 	}
 	// validate namespace
 	if config.Namespace == "" {
-		config.Logger.Error("Handler error: %v", ErrNamespaceNotSet)
 		return nil, ErrNamespaceNotSet
 	}
 	// construct handler
@@ -112,6 +110,7 @@ func (rlh *RateLimitHandler) handleFlushCommand(ctx context.Context, messageId s
 	rlh.Logger.Info("received FLUSH event from event bridge")
 	if err := rlh.Batcher.FlushAll(ctx, time.Now()); err != nil {
 		rlh.Logger.Error("flush error: %v", err)
+		return
 	}
 	rlh.Logger.Info("flushed all CloudTrail EMF records due to flush message %s", messageId)
 }
@@ -123,7 +122,8 @@ func (rlh *RateLimitHandler) handleCloudTrailEvent(ctx context.Context, msg even
 		rlh.Logger.Error("failed to unmarshal SQS message %s: %v", msg.MessageId, err)
 		return &events.SQSBatchItemFailure{ItemIdentifier: msg.MessageId}
 	}
-	rlh.Logger.Info("received cloudtrail event=%+v", ctEvent)
+	// Logger automatically sanitizes all string arguments via SanitizingLogger wrapper
+	rlh.Logger.Debug("processing CloudTrail event: eventName=%s region=%s requestId=%s", ctEvent.EventName, ctEvent.AWSRegion, ctEvent.RequestID)
 	rlh.Batcher.Add(ctx, ctEvent.AWSRegion, ctEvent)
 	return nil
 }

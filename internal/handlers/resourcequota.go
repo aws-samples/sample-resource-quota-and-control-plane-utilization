@@ -92,7 +92,7 @@ func NewResourceQuotaHandler(config ResourceQuotaHandlerConfig) (*ResourceQuotaH
 		return nil, ErrStoreNil
 	}
 
-	return &ResourceQuotaHandler{
+	h := &ResourceQuotaHandler{
 		ClientFactory:       config.ClientFactory,
 		CloudwatchLogGroup:  config.CloudwatchLogGroup,
 		CloudWatchLogStream: config.CloudWatchLogStream,
@@ -102,13 +102,16 @@ func NewResourceQuotaHandler(config ResourceQuotaHandlerConfig) (*ResourceQuotaH
 		ServiceConfig:       config.ServiceConfig,
 		Store:               config.Store,
 		Logger:              config.Logger,
-	}, nil
+	}
+	h.Logger.Info("ResourceQuotaHandler initialized for namespace %s", config.Namespace)
+	return h, nil
 }
 
 // HandleEvent processes scheduled CloudWatch events by coordinating job execution,
 // flushing all metrics, closing the NAU store, and returning any error.
 func (h *ResourceQuotaHandler) HandleEvent(ctx context.Context, event events.CloudWatchEvent) error {
-	h.Logger.Info("resource handler handling event %+v", event)
+	h.Logger.Info("starting resource quota metrics collection")
+	h.Logger.Debug("received scheduled event: %+v", event)
 
 	// 1) Wait for all jobs to finish
 	h.JobManager.Wait()
@@ -132,6 +135,7 @@ func (h *ResourceQuotaHandler) HandleEvent(ctx context.Context, event events.Clo
 func (h *ResourceQuotaHandler) flushAllMetrics(ctx context.Context) error {
 	h.Logger.Info("flushing metrics to CloudWatch Logs for all regions")
 	h.RegionalBatchers.Range(func(region string, batcher metrics.Batcher) bool {
+		h.Logger.Debug("flushing metrics for region: %s", region)
 		batcher.FlushAll(ctx)
 		return true
 	})

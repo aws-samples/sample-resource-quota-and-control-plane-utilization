@@ -171,7 +171,7 @@ func TestCTFileBatcherConfig_Validate(t *testing.T) {
 				EmfFlusher: mockFlusher,
 			},
 			expectError: true,
-			errorType:   ErrInvalidConfig,
+			errorType:   ErrBaseDirEmpty,
 		},
 		{
 			name: "empty namespace",
@@ -181,7 +181,7 @@ func TestCTFileBatcherConfig_Validate(t *testing.T) {
 				EmfFlusher: mockFlusher,
 			},
 			expectError: true,
-			errorType:   ErrInvalidConfig,
+			errorType:   ErrNamespaceEmpty,
 		},
 		{
 			name: "empty metric name",
@@ -191,7 +191,7 @@ func TestCTFileBatcherConfig_Validate(t *testing.T) {
 				EmfFlusher: mockFlusher,
 			},
 			expectError: true,
-			errorType:   ErrInvalidConfig,
+			errorType:   ErrMetricNameEmpty,
 		},
 		{
 			name: "nil EMF flusher",
@@ -201,7 +201,7 @@ func TestCTFileBatcherConfig_Validate(t *testing.T) {
 				MetricName: "TestMetric",
 			},
 			expectError: true,
-			errorType:   ErrInvalidConfig,
+			errorType:   ErrEMFFlusherNil,
 		},
 	}
 
@@ -242,7 +242,7 @@ func TestNewCTFileBatcher(t *testing.T) {
 		
 		_, err := NewCTFileBatcher(config)
 		assert.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidConfig)
+		assert.ErrorIs(t, err, ErrNamespaceEmpty)
 	})
 	
 	t.Run("with custom dependencies", func(t *testing.T) {

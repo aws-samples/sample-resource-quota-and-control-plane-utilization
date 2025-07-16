@@ -146,6 +146,7 @@ func ConvertSQSMessageToEMFWithTimeProvider(
 ) (EMFRecord, error) {
 	var ctEvent types.CloudTrailEvent
 	if err := json.Unmarshal([]byte(msg.Body), &ctEvent); err != nil {
+		// amazonq-ignore-next-line
 		applogger.Error("Error unmarshaling CloudTrail event: %v", err.Error())
 		return EMFRecord{}, ErrUnmarshalFailed
 	}

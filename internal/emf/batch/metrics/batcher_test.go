@@ -86,7 +86,7 @@ func TestMetricsBatcherConfig_Validate(t *testing.T) {
 				Region:     "us-east-1",
 				EmfFlusher: mockFlusher,
 			},
-			wantErr: ErrInvalidConfig,
+			wantErr: ErrEmptyNamespace,
 		},
 		{
 			name: "empty region",
@@ -94,7 +94,7 @@ func TestMetricsBatcherConfig_Validate(t *testing.T) {
 				Namespace:  "TestNamespace",
 				EmfFlusher: mockFlusher,
 			},
-			wantErr: ErrInvalidConfig,
+			wantErr: ErrEmptyRegion,
 		},
 		{
 			name: "nil EMF flusher",
@@ -102,7 +102,7 @@ func TestMetricsBatcherConfig_Validate(t *testing.T) {
 				Namespace: "TestNamespace",
 				Region:    "us-east-1",
 			},
-			wantErr: ErrInvalidConfig,
+			wantErr: ErrNilEMFFlusher,
 		},
 	}
 
@@ -275,7 +275,7 @@ func TestBuildDimensions(t *testing.T) {
 	tests := []struct {
 		name     string
 		metadata map[string]string
-		expected [][]string
+		expected map[string]string
 	}{
 		{
 			name:     "nil metadata",
@@ -287,7 +287,7 @@ func TestBuildDimensions(t *testing.T) {
 			metadata: map[string]string{
 				"region": "us-east-1",
 			},
-			expected: [][]string{{"region", "us-east-1"}},
+			expected: map[string]string{"region": "us-east-1"},
 		},
 	}
 
@@ -298,9 +298,13 @@ func TestBuildDimensions(t *testing.T) {
 				assert.Nil(t, result)
 			} else {
 				assert.Len(t, result, len(tt.expected))
-				for _, expectedDim := range tt.expected {
-					assert.Contains(t, result, expectedDim)
+				// Convert result back to map for comparison
+				resultMap := make(map[string]string)
+				for _, dim := range result {
+					assert.Len(t, dim, 2, "each dimension should have exactly 2 elements")
+					resultMap[dim[0]] = dim[1]
 				}
+				assert.Equal(t, tt.expected, resultMap)
 			}
 		})
 	}

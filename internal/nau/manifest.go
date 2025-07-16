@@ -15,8 +15,12 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 )
 
-// ErrHeaderNotWritten is returned when WriteRecord is called before WriteHeader.
-var ErrHeaderNotWritten = errors.New("manifest header not written")
+// Pre-created errors for easier testing and readability
+var (
+	ErrHeaderNotWritten = errors.New("manifest header not written")
+	ErrManifestClosed   = errors.New("manifest closed - cannot write more records")
+	ErrAlreadyFinalized = errors.New("manifest already finalized")
+)
 
 // CSVRecord represents a data structure that can be exported as a CSV row.
 type CSVRecord interface {
@@ -40,39 +44,50 @@ type Manifest interface {
 
 // manifestImpl implements the Manifest interface with S3 upload capability.
 type manifestImpl struct {
-	ctx        context.Context   // Context for S3 operations
-	bucket     string            // S3 bucket name
-	key        string            // S3 object key
-	client     s3client.S3Client // S3 client for uploads
-	header     []string          // CSV header columns
-	records    [][]string        // Buffered CSV records
-	errHandler ErrorHandler      // Error handling callback
-	log        logger.Logger     // Logger instance
-	finalized  bool              // Tracks finalization state
+	parentCtx  context.Context    // Parent context (e.g., Lambda context)
+	ctx        context.Context    // Manifest's own context
+	cancel     context.CancelFunc // Cancel function for manifest context
+	bucket     string             // S3 bucket name
+	key        string             // S3 object key
+	client     s3client.S3Client  // S3 client for uploads
+	header     []string           // CSV header columns
+	records    [][]string         // Buffered CSV records
+	errHandler ErrorHandler       // Error handling callback
+	log        logger.Logger      // Logger instance
 
 	// Thread-safety components
-	recordChan  chan CSVRecord
-	done        chan struct{}
-	processorWg sync.WaitGroup
-	startOnce   sync.Once
+	recordChan   chan CSVRecord
+	processorWg  sync.WaitGroup
+	finalizeOnce sync.Once // Ensures Finalize runs only once
 }
 
 // NewManifest creates a new Manifest instance for CSV generation and S3 upload.
 // The manifest will buffer records and upload them to the specified S3 location on finalization.
-func NewManifest(ctx context.Context, bucket, key string, client s3client.S3Client, errHandler ErrorHandler, log logger.Logger) Manifest {
-	log.Debug("creating new manifest for S3 upload: bucket=%s key=%s", bucket, key)
+func NewManifest(parentCtx context.Context, bucket, key string, client s3client.S3Client, errHandler ErrorHandler, log logger.Logger) Manifest {
 	metadata := ResourceMetadata{}
-	return &manifestImpl{
-		ctx:         ctx,
-		bucket:      bucket,
-		key:         key,
-		client:      client,
-		errHandler:  errHandler,
-		header:      metadata.Header(),
-		log:         log,
-		recordChan:  make(chan CSVRecord, 1000),
-		done:        make(chan struct{}),
+
+	// Create manifest's own context derived from parent
+	ctx, cancel := context.WithCancel(parentCtx)
+
+	m := &manifestImpl{
+		parentCtx:  parentCtx,
+		ctx:        ctx,
+		cancel:     cancel,
+		bucket:     bucket,
+		key:        key,
+		client:     client,
+		errHandler: errHandler,
+		header:     metadata.Header(),
+		log:        log,
+		recordChan: make(chan CSVRecord, 1000),
 	}
+
+	// Start the processor immediately
+	m.processorWg.Add(1)
+	go m.recordProcessor()
+
+	m.log.Info("manifest initialized for S3 upload: %s", key)
+	return m
 }
 
 // WriteHeader sets the CSV header columns. Subsequent calls are ignored.
@@ -81,24 +96,18 @@ func (m *manifestImpl) WriteHeader(columns []string) error {
 		return nil
 	}
 	m.header = append([]string(nil), columns...)
-	m.log.Info("manifest header set: %v", m.header)
 	return nil
 }
 
 // WriteRecord adds a CSV record to the buffer for later processing.
 // This method is thread-safe and uses internal channels for coordination.
 func (m *manifestImpl) WriteRecord(rec CSVRecord) error {
-	m.ensureProcessorStarted()
-	m.recordChan <- rec
-	return nil
-}
-
-// ensureProcessorStarted starts the record processor goroutine on first use.
-func (m *manifestImpl) ensureProcessorStarted() {
-	m.startOnce.Do(func() {
-		m.processorWg.Add(1)
-		go m.recordProcessor()
-	})
+	select {
+	case m.recordChan <- rec:
+		return nil
+	case <-m.ctx.Done():
+		return ErrManifestClosed
+	}
 }
 
 // recordProcessor handles records sequentially in a separate goroutine.
@@ -106,75 +115,96 @@ func (m *manifestImpl) recordProcessor() {
 	defer m.processorWg.Done()
 	for {
 		select {
-		case rec := <-m.recordChan:
+		case rec, ok := <-m.recordChan:
+			if !ok {
+				// Channel closed - exit immediately
+				return
+			}
 			vals := append([]string(nil), rec.Values()...)
 			m.records = append(m.records, vals)
-			m.log.Debug("buffered record: %v", vals)
-		case <-m.done:
-			// Drain remaining records
-			for {
-				select {
-				case rec := <-m.recordChan:
-					vals := append([]string(nil), rec.Values()...)
-					m.records = append(m.records, vals)
-				default:
-					return
-				}
+		case <-m.ctx.Done():
+			// Context cancelled - drain remaining records then exit
+			m.drainRecords()
+			return
+		}
+	}
+}
+
+// drainRecords processes any remaining records in the channel before shutdown.
+func (m *manifestImpl) drainRecords() {
+	for {
+		select {
+		case rec, ok := <-m.recordChan:
+			if !ok {
+				return // Channel closed
 			}
+			vals := append([]string(nil), rec.Values()...)
+			m.records = append(m.records, vals)
+		default:
+			// No more records available
+			return
 		}
 	}
 }
 
 // Finalize generates the complete CSV from buffered records and uploads to S3.
-// This operation is idempotent - subsequent calls after success are no-ops.
+// This operation is idempotent - subsequent calls are no-ops.
 func (m *manifestImpl) Finalize() error {
-	if m.finalized {
-		return nil
-	}
-	if m.header == nil {
-		return ErrHeaderNotWritten
-	}
+	var finalizeErr error
 
-	// Stop the processor and wait for it to finish
-	close(m.done)
-	m.processorWg.Wait()
-
-
-	// Build CSV in memory
-	buf := &bytes.Buffer{}
-	csvw := csv.NewWriter(buf)
-	if err := csvw.Write(m.header); err != nil {
-		m.handleErr(err)
-		return err
-	}
-
-	m.log.Info("record count : %d", len(m.records))
-	for _, row := range m.records {
-		if err := csvw.Write(row); err != nil {
-			m.handleErr(err)
-			return err
+	m.finalizeOnce.Do(func() {
+		if m.header == nil {
+			finalizeErr = ErrHeaderNotWritten
+			return
 		}
-	}
-	csvw.Flush()
-	if err := csvw.Error(); err != nil {
-		m.handleErr(err)
-		return err
-	}
 
-	// Upload to S3
-	input := &s3.PutObjectInput{
-		Bucket: &m.bucket,
-		Key:    &m.key,
-		Body:   bytes.NewReader(buf.Bytes()),
-	}
-	if _, err := m.client.PutObject(m.ctx, input); err != nil {
-		m.handleErr(err)
-		return err
-	}
+		// Signal shutdown and close the record channel
+		m.cancel() // Cancel manifest context
+		close(m.recordChan)
 
-	m.finalized = true
-	m.log.Info("manifest finalized and uploaded to S3: %s (records=%d)", m.key, len(m.records))
-	return nil
+		// Wait for processor to finish
+		m.processorWg.Wait()
+
+		// Build CSV in memory
+		buf := &bytes.Buffer{}
+		csvw := csv.NewWriter(buf)
+		if err := csvw.Write(m.header); err != nil {
+			m.handleErr(err)
+			finalizeErr = err
+			return
+		}
+
+		m.log.Info("record count : %d", len(m.records))
+		for _, row := range m.records {
+			if err := csvw.Write(row); err != nil {
+				m.handleErr(err)
+				finalizeErr = err
+				return
+			}
+		}
+		csvw.Flush()
+		if err := csvw.Error(); err != nil {
+			m.handleErr(err)
+			finalizeErr = err
+			return
+		}
+
+		// Upload to S3
+		input := &s3.PutObjectInput{
+			Bucket: &m.bucket,
+			Key:    &m.key,
+			Body:   bytes.NewReader(buf.Bytes()),
+		}
+		if _, err := m.client.PutObject(m.ctx, input); err != nil {
+			m.handleErr(err)
+			finalizeErr = err
+			return
+		}
+
+		m.log.Info("manifest finalized and uploaded to S3: %s (records=%d)", m.key, len(m.records))
+	})
+
+	return finalizeErr
 }
 
 // handleErr invokes the error handler if one is configured.
