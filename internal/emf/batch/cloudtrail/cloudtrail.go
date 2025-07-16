@@ -85,6 +85,7 @@ func (DefaultTimeProvider) Parse(layout, value string) (time.Time, error) {
 // Batcher defines the interface for batching CloudTrail events and flushing them as EMF records.
 type Batcher interface {
 	Add(ctx context.Context, region string, ct types.CloudTrailEvent)
+	AddCounters(ctx context.Context, counters map[string]map[string]int) error
 	FlushAll(ctx context.Context, time time.Time) error
 }
 
@@ -106,19 +107,26 @@ type CTFileBatcher struct {
 	timeCalc     *TimeCalculator
 }
 
+// PropagateInvoker returns whether to propagate invoker information
+func (fb *CTFileBatcher) PropagateInvoker() bool {
+	return fb.propagrateInvoker
+}
+
 // CounterManager handles counter file operations
 type CounterManager struct {
-	fs      FileSystem
-	baseDir string
-	logger  logger.Logger
+	fs       FileSystem
+	baseDir  string
+	filePath string
+	logger   logger.Logger
 }
 
 // NewCounterManager creates a new counter manager
 func NewCounterManager(fs FileSystem, baseDir string, logger logger.Logger) *CounterManager {
 	return &CounterManager{
-		fs:      fs,
-		baseDir: baseDir,
-		logger:  logger,
+		fs:       fs,
+		baseDir:  baseDir,
+		filePath: filepath.Join(baseDir, "counters.json"),
+		logger:   logger,
 	}
 }
 
@@ -235,6 +243,26 @@ func (fb *CTFileBatcher) Add(ctx context.Context, region string, ct types.CloudT
 	}
 }
 
+// AddCounters adds multiple counters at once for multiple regions
+func (fb *CTFileBatcher) AddCounters(ctx context.Context, counters map[string]map[string]int) error {
+	// Validate regions
+	for region := range counters {
+		if !utils.IsValidRegion(region) {
+			fb.logger.Error("AddCounters: %v: %s", ErrInvalidRegion, region)
+			delete(counters, region) // Remove invalid region
+		}
+	}
+	
+	// Add all counters in a single operation
+	if err := fb.counterMgr.AddCounters(counters); err != nil {
+		fb.logger.Error("add counters: %v", err)
+		return err
+	}
+	
+	fb.logger.Debug("added batch counters for %d regions", len(counters))
+	return nil
+}
+
 // GenerateCounterKeys generates counter keys from CloudTrail event
 func GenerateCounterKeys(ct types.CloudTrailEvent, propagateInvoker bool) []string {
 	keys := []string{ct.EventName} // Always have simple eventName counter
@@ -248,20 +276,17 @@ func GenerateCounterKeys(ct types.CloudTrailEvent, propagateInvoker bool) []stri
 	return keys
 }
 
-// ReadCounters reads the counter file for a specific region
-func (cm *CounterManager) ReadCounters(region string) (map[string]int, error) {
-	filePath := filepath.Join(cm.baseDir, fmt.Sprintf("counters_%s.json", region))
-
-	data, err := cm.fs.ReadFile(filePath)
+// ReadCounters reads all counters from the single counter file
+func (cm *CounterManager) ReadCounters() (map[string]map[string]int, error) {
+	data, err := cm.fs.ReadFile(cm.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return make(map[string]int), nil // Return empty map if file doesn't exist
+			return make(map[string]map[string]int), nil // Return empty map if file doesn't exist
 		}
 		return nil, fmt.Errorf("%w: %v", ErrCounterFileRead, err)
-		// amazonq-ignore-next-line
 	}
 
-	var counters map[string]int
+	var counters map[string]map[string]int
 	if err := json.Unmarshal(data, &counters); err != nil {
 		return nil, fmt.Errorf("%w: invalid JSON: %v", ErrCounterFileRead, err)
 	}
@@ -269,22 +294,34 @@ func (cm *CounterManager) ReadCounters(region string) (map[string]int, error) {
 	return counters, nil
 }
 
-// WriteCounters writes counters to file for a specific region
-func (cm *CounterManager) WriteCounters(region string, counters map[string]int) error {
-	filePath := filepath.Join(cm.baseDir, fmt.Sprintf("counters_%s.json", region))
+// ReadRegionCounters reads counters for a specific region
+func (cm *CounterManager) ReadRegionCounters(region string) (map[string]int, error) {
+	allCounters, err := cm.ReadCounters()
+	if err != nil {
+		return nil, err
+	}
+	
+	if regionCounters, exists := allCounters[region]; exists {
+		return regionCounters, nil
+	}
+	
+	return make(map[string]int), nil
+}
 
+// WriteCounters writes all counters to the single counter file
+func (cm *CounterManager) WriteCounters(counters map[string]map[string]int) error {
 	data, err := json.Marshal(counters)
 	if err != nil {
 		return fmt.Errorf("%w: marshal failed: %v", ErrCounterFileWrite, err)
 	}
 
 	// Atomic write pattern
-	tempFile := filePath + ".tmp"
+	tempFile := cm.filePath + ".tmp"
 	if err := cm.fs.WriteFile(tempFile, data, 0600); err != nil {
 		return fmt.Errorf("%w: temp file write failed: %v", ErrCounterFileWrite, err)
 	}
 
-	if err := cm.fs.Rename(tempFile, filePath); err != nil {
+	if err := cm.fs.Rename(tempFile, cm.filePath); err != nil {
 		return fmt.Errorf("%w: atomic rename failed: %v", ErrCounterFileWrite, err)
 	}
 
@@ -293,41 +330,98 @@ func (cm *CounterManager) WriteCounters(region string, counters map[string]int) 
 
 // IncrementCounter atomically increments a counter for a specific region and key
 func (cm *CounterManager) IncrementCounter(region, key string) error {
-	counters, err := cm.ReadCounters(region)
+	allCounters, err := cm.ReadCounters()
 	if err != nil {
 		return err
 	}
 
-	counters[key]++
+	// Ensure region map exists
+	if allCounters[region] == nil {
+		allCounters[region] = make(map[string]int)
+	}
 
-	return cm.WriteCounters(region, counters)
+	// Increment counter
+	allCounters[region][key]++
+
+	return cm.WriteCounters(allCounters)
 }
 
-// ClearCounters removes the counter file for a region
-func (cm *CounterManager) ClearCounters(region string) error {
-	filePath := filepath.Join(cm.baseDir, fmt.Sprintf("counters_%s.json", region))
-	if err := cm.fs.Remove(filePath); err != nil && !os.IsNotExist(err) {
-		cm.logger.Error("clear counter file %s: %v", filePath, err)
+// MergeCounters merges new counters into existing counters
+func (cm *CounterManager) MergeCounters(existing, new map[string]map[string]int) map[string]map[string]int {
+	// Start with a copy of existing data
+	result := make(map[string]map[string]int)
+	
+	// Copy all existing data first
+	for region, counters := range existing {
+		result[region] = make(map[string]int)
+		for key, count := range counters {
+			result[region][key] = count
+		}
+	}
+	
+	// Then add/update only the keys in the new data
+	for region, counters := range new {
+		if result[region] == nil {
+			result[region] = make(map[string]int)
+		}
+		for key, count := range counters {
+			result[region][key] += count
+		}
+	}
+	
+	return result
+}
+
+// AddCounters adds multiple counters at once
+func (cm *CounterManager) AddCounters(newCounters map[string]map[string]int) error {
+	// Read existing counters
+	existingCounters, err := cm.ReadCounters()
+	if err != nil {
+		return err
+	}
+	
+	// Merge counters
+	mergedCounters := cm.MergeCounters(existingCounters, newCounters)
+	
+	// Write back to file
+	return cm.WriteCounters(mergedCounters)
+}
+
+// ClearRegionCounters removes a region's counters from the file
+func (cm *CounterManager) ClearRegionCounters(region string) error {
+	allCounters, err := cm.ReadCounters()
+	if err != nil {
+		return err
+	}
+	
+	// Remove the region
+	delete(allCounters, region)
+	
+	// Write back to file
+	return cm.WriteCounters(allCounters)
+}
+
+// ClearAllCounters removes the counter file entirely
+func (cm *CounterManager) ClearAllCounters() error {
+	if err := cm.fs.Remove(cm.filePath); err != nil && !os.IsNotExist(err) {
+		cm.logger.Error("clear counter file %s: %v", cm.filePath, err)
 		return err
 	}
 	return nil
 }
 
-// GetRegions returns all regions that have counter files
+// GetRegions returns all regions that have counters
 func (cm *CounterManager) GetRegions() ([]string, error) {
-	files, err := cm.fs.Glob(filepath.Join(cm.baseDir, "counters_*.json"))
+	allCounters, err := cm.ReadCounters()
 	if err != nil {
 		return nil, err
 	}
-
-	var regions []string
-	for _, file := range files {
-		base := filepath.Base(file)
-		if strings.HasPrefix(base, "counters_") && strings.HasSuffix(base, ".json") {
-			region := base[9 : len(base)-5] // Remove "counters_" and ".json"
-			regions = append(regions, region)
-		}
+	
+	regions := make([]string, 0, len(allCounters))
+	for region := range allCounters {
+		regions = append(regions, region)
 	}
+	
 	return regions, nil
 }
 
@@ -410,17 +504,17 @@ func (fb *CTFileBatcher) FlushAll(ctx context.Context, flushTime time.Time) erro
 		elapsed = 60 // Default fallback
 	}
 
-	// Process each region's counters
-	regions, err := fb.counterMgr.GetRegions()
+	// Read all counters
+	allCounters, err := fb.counterMgr.ReadCounters()
 	if err != nil {
-		fb.logger.Error("get regions: %v", err)
+		fb.logger.Error("read counters: %v", err)
 		return fmt.Errorf("%w: %v", ErrFlushFailed, err)
 	}
-
-	for _, region := range regions {
-		counters, err := fb.counterMgr.ReadCounters(region)
-		if err != nil {
-			fb.logger.Error("read counters for region %s: %v", region, err)
+	
+	// Process each region's counters
+	for region, counters := range allCounters {
+		if !utils.IsValidRegion(region) {
+			fb.logger.Error("invalid region in counters: %s", region)
 			continue
 		}
 
@@ -436,8 +530,21 @@ func (fb *CTFileBatcher) FlushAll(ctx context.Context, flushTime time.Time) erro
 			if err := fb.emfFlusher.Flush(ctx, region, records); err != nil {
 				fb.logger.Error("flush region %s: %v", region, err)
 			} else {
-				fb.counterMgr.ClearCounters(region)
+				// Remove this region's counters
+				delete(allCounters, region)
 			}
+		}
+	}
+	
+	// Write back remaining counters (if any)
+	if len(allCounters) > 0 {
+		if err := fb.counterMgr.WriteCounters(allCounters); err != nil {
+			fb.logger.Error("write remaining counters: %v", err)
+		}
+	} else {
+		// All regions were flushed, clear the file
+		if err := fb.counterMgr.ClearAllCounters(); err != nil {
+			fb.logger.Error("clear all counters: %v", err)
 		}
 	}
 

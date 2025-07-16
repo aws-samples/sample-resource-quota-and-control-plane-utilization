@@ -269,35 +269,63 @@ func TestCounterManager_ReadCounters(t *testing.T) {
 	cm := NewCounterManager(mockFS, "/tmp", &logger.NoopLogger{})
 	
 	t.Run("non-existent file", func(t *testing.T) {
-		counters, err := cm.ReadCounters("us-east-1")
+		counters, err := cm.ReadCounters()
 		require.NoError(t, err)
 		assert.Empty(t, counters)
 	})
 	
 	t.Run("existing file", func(t *testing.T) {
-		testCounters := map[string]int{"event1": 5, "event2": 10}
+		testCounters := map[string]map[string]int{
+			"us-east-1": {"event1": 5, "event2": 10},
+			"us-west-2": {"event3": 3},
+		}
 		data, _ := json.Marshal(testCounters)
-		mockFS.files["/tmp/counters_us-east-1.json"] = data
+		mockFS.files["/tmp/counters.json"] = data
 		
-		counters, err := cm.ReadCounters("us-east-1")
+		counters, err := cm.ReadCounters()
 		require.NoError(t, err)
 		assert.Equal(t, testCounters, counters)
 	})
 	
 	t.Run("invalid JSON", func(t *testing.T) {
-		mockFS.files["/tmp/counters_invalid.json"] = []byte("invalid json")
+		mockFS.files["/tmp/counters.json"] = []byte("invalid json")
 		
-		_, err := cm.ReadCounters("invalid")
+		_, err := cm.ReadCounters()
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrCounterFileRead)
 	})
 	
 	t.Run("read error", func(t *testing.T) {
-		mockFS.errors["/tmp/counters_error.json"] = errors.New("read error")
+		mockFS.errors["/tmp/counters.json"] = errors.New("read error")
 		
-		_, err := cm.ReadCounters("error")
+		_, err := cm.ReadCounters()
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrCounterFileRead)
+	})
+}
+
+func TestCounterManager_ReadRegionCounters(t *testing.T) {
+	mockFS := NewMockFileSystem()
+	cm := NewCounterManager(mockFS, "/tmp", &logger.NoopLogger{})
+	
+	// Set up test data
+	testCounters := map[string]map[string]int{
+		"us-east-1": {"event1": 5, "event2": 10},
+		"us-west-2": {"event3": 3},
+	}
+	data, _ := json.Marshal(testCounters)
+	mockFS.files["/tmp/counters.json"] = data
+	
+	t.Run("existing region", func(t *testing.T) {
+		counters, err := cm.ReadRegionCounters("us-east-1")
+		require.NoError(t, err)
+		assert.Equal(t, testCounters["us-east-1"], counters)
+	})
+	
+	t.Run("non-existent region", func(t *testing.T) {
+		counters, err := cm.ReadRegionCounters("eu-west-1")
+		require.NoError(t, err)
+		assert.Empty(t, counters)
 	})
 }
 
@@ -306,25 +334,28 @@ func TestCounterManager_WriteCounters(t *testing.T) {
 	cm := NewCounterManager(mockFS, "/tmp", &logger.NoopLogger{})
 	
 	t.Run("successful write", func(t *testing.T) {
-		testCounters := map[string]int{"event1": 5, "event2": 10}
+		testCounters := map[string]map[string]int{
+			"us-east-1": {"event1": 5, "event2": 10},
+			"us-west-2": {"event3": 3},
+		}
 		
-		err := cm.WriteCounters("us-east-1", testCounters)
+		err := cm.WriteCounters(testCounters)
 		require.NoError(t, err)
 		
 		// Verify file was written
-		data, exists := mockFS.files["/tmp/counters_us-east-1.json"]
+		data, exists := mockFS.files["/tmp/counters.json"]
 		assert.True(t, exists)
 		
-		var savedCounters map[string]int
+		var savedCounters map[string]map[string]int
 		err = json.Unmarshal(data, &savedCounters)
 		require.NoError(t, err)
 		assert.Equal(t, testCounters, savedCounters)
 	})
 	
 	t.Run("write error", func(t *testing.T) {
-		mockFS.errors["/tmp/counters_error.json.tmp"] = errors.New("write error")
+		mockFS.errors["/tmp/counters.json.tmp"] = errors.New("write error")
 		
-		err := cm.WriteCounters("error", map[string]int{"test": 1})
+		err := cm.WriteCounters(map[string]map[string]int{"error": {"test": 1}})
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrCounterFileWrite)
 	})
@@ -338,23 +369,46 @@ func TestCounterManager_IncrementCounter(t *testing.T) {
 		err := cm.IncrementCounter("us-east-1", "event1")
 		require.NoError(t, err)
 		
-		counters, err := cm.ReadCounters("us-east-1")
+		allCounters, err := cm.ReadCounters()
 		require.NoError(t, err)
-		assert.Equal(t, 1, counters["event1"])
+		assert.Equal(t, 1, allCounters["us-east-1"]["event1"])
 	})
 	
 	t.Run("existing counter", func(t *testing.T) {
 		// Set up existing counter
-		testCounters := map[string]int{"event1": 5}
+		testCounters := map[string]map[string]int{
+			"us-east-1": {"event1": 5},
+		}
 		data, _ := json.Marshal(testCounters)
-		mockFS.files["/tmp/counters_us-east-1.json"] = data
+		mockFS.files["/tmp/counters.json"] = data
 		
 		err := cm.IncrementCounter("us-east-1", "event1")
 		require.NoError(t, err)
 		
-		counters, err := cm.ReadCounters("us-east-1")
+		allCounters, err := cm.ReadCounters()
 		require.NoError(t, err)
-		assert.Equal(t, 6, counters["event1"])
+		assert.Equal(t, 6, allCounters["us-east-1"]["event1"])
+	})
+	
+	t.Run("new region", func(t *testing.T) {
+		// Clear existing files
+		mockFS.files = make(map[string][]byte)
+		
+		// Set up existing counter for one region
+		testCounters := map[string]map[string]int{
+			"us-east-1": {"event1": 5},
+		}
+		data, _ := json.Marshal(testCounters)
+		mockFS.files["/tmp/counters.json"] = data
+		
+		// Increment counter for new region
+		err := cm.IncrementCounter("us-west-2", "event2")
+		require.NoError(t, err)
+		
+		allCounters, err := cm.ReadCounters()
+		require.NoError(t, err)
+		assert.Equal(t, 5, allCounters["us-east-1"]["event1"])
+		assert.Equal(t, 1, allCounters["us-west-2"]["event2"])
 	})
 }
 
@@ -369,17 +423,20 @@ func TestCounterManager_GetRegions(t *testing.T) {
 	})
 	
 	t.Run("multiple regions", func(t *testing.T) {
-		mockFS.files["/tmp/counters_us-east-1.json"] = []byte("{}")
-		mockFS.files["/tmp/counters_eu-west-2.json"] = []byte("{}")
-		mockFS.files["/tmp/other_file.txt"] = []byte("ignored")
+		testCounters := map[string]map[string]int{
+			"us-east-1": {"event1": 5},
+			"eu-west-2": {"event2": 3},
+		}
+		data, _ := json.Marshal(testCounters)
+		mockFS.files["/tmp/counters.json"] = data
 		
 		regions, err := cm.GetRegions()
 		require.NoError(t, err)
 		assert.ElementsMatch(t, []string{"us-east-1", "eu-west-2"}, regions)
 	})
 	
-	t.Run("glob error", func(t *testing.T) {
-		mockFS.errors["/tmp/counters_*.json"] = errors.New("glob error")
+	t.Run("read error", func(t *testing.T) {
+		mockFS.errors["/tmp/counters.json"] = errors.New("read error")
 		
 		_, err := cm.GetRegions()
 		assert.Error(t, err)
@@ -578,10 +635,10 @@ func TestCTFileBatcher_Add(t *testing.T) {
 		
 		// Verify counters were incremented
 		cm := batcher.(*CTFileBatcher).counterMgr
-		counters, err := cm.ReadCounters("us-east-1")
+		allCounters, err := cm.ReadCounters()
 		require.NoError(t, err)
-		assert.Equal(t, 1, counters["TestEvent"])
-		assert.Equal(t, 1, counters["TestEvent:IAMUser:testuser"])
+		assert.Equal(t, 1, allCounters["us-east-1"]["TestEvent"])
+		assert.Equal(t, 1, allCounters["us-east-1"]["TestEvent:IAMUser:testuser"])
 	})
 	
 	t.Run("invalid region", func(t *testing.T) {
@@ -615,9 +672,12 @@ func TestCTFileBatcher_FlushAll(t *testing.T) {
 	
 	t.Run("successful flush", func(t *testing.T) {
 		// Set up counter data
-		counters := map[string]int{"TestEvent": 10, "AnotherEvent": 5}
+		counters := map[string]map[string]int{
+			"us-east-1": {"TestEvent": 10, "AnotherEvent": 5},
+			"us-west-2": {"TestEvent": 3},
+		}
 		data, _ := json.Marshal(counters)
-		mockFS.files["/tmp/counters_us-east-1.json"] = data
+		mockFS.files["/tmp/counters.json"] = data
 		
 		// Set up last flush time (30 seconds ago)
 		lastFlush := testTime.Add(-30 * time.Second)
@@ -626,13 +686,19 @@ func TestCTFileBatcher_FlushAll(t *testing.T) {
 		err := batcher.FlushAll(context.Background(), testTime)
 		require.NoError(t, err)
 		
-		// Verify EMF flusher was called
-		assert.Len(t, mockFlusher.flushCalls, 1)
+		// Verify EMF flusher was called for each region
+		assert.Len(t, mockFlusher.flushCalls, 2)
+		
+		// Check first region
 		assert.Equal(t, "us-east-1", mockFlusher.flushCalls[0].Region)
 		assert.Len(t, mockFlusher.flushCalls[0].Records, 2)
 		
+		// Check second region
+		assert.Equal(t, "us-west-2", mockFlusher.flushCalls[1].Region)
+		assert.Len(t, mockFlusher.flushCalls[1].Records, 1)
+		
 		// Verify counter file was cleared
-		_, exists := mockFS.files["/tmp/counters_us-east-1.json"]
+		_, exists := mockFS.files["/tmp/counters.json"]
 		assert.False(t, exists)
 		
 		// Verify flush time was saved
@@ -643,18 +709,27 @@ func TestCTFileBatcher_FlushAll(t *testing.T) {
 	
 	t.Run("flush error", func(t *testing.T) {
 		mockFlusher.flushError = errors.New("flush failed")
+		mockFlusher.flushCalls = nil // Reset flush calls
 		
 		// Set up counter data
-		counters := map[string]int{"TestEvent": 1}
+		counters := map[string]map[string]int{
+			"us-east-1": {"TestEvent": 1},
+		}
 		data, _ := json.Marshal(counters)
-		mockFS.files["/tmp/counters_us-east-1.json"] = data
+		mockFS.files["/tmp/counters.json"] = data
 		
 		err := batcher.FlushAll(context.Background(), testTime)
 		require.NoError(t, err) // FlushAll doesn't return flush errors
 		
-		// Verify counter file was NOT cleared due to flush error
-		_, exists := mockFS.files["/tmp/counters_us-east-1.json"]
+		// Verify counter file still exists with data
+		data, exists := mockFS.files["/tmp/counters.json"]
 		assert.True(t, exists)
+		
+		// Verify the counters are still there
+		var remainingCounters map[string]map[string]int
+		err = json.Unmarshal(data, &remainingCounters)
+		require.NoError(t, err)
+		assert.Equal(t, counters, remainingCounters)
 	})
 }
 
@@ -681,4 +756,157 @@ func BenchmarkCounterIncrement(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		cm.IncrementCounter("us-east-1", "TestEvent")
 	}
+}
+
+func TestCounterManager_MergeCounters(t *testing.T) {
+	mockFS := NewMockFileSystem()
+	cm := NewCounterManager(mockFS, "/tmp", &logger.NoopLogger{})
+	
+	t.Run("merge with existing counters", func(t *testing.T) {
+		existing := map[string]map[string]int{
+			"us-east-1": {"event1": 5, "event2": 10},
+			"us-west-2": {"event3": 3},
+		}
+		
+		new := map[string]map[string]int{
+			"us-east-1": {"event1": 2, "event3": 1},
+			"eu-west-1": {"event4": 7},
+		}
+		
+		result := cm.MergeCounters(existing, new)
+		
+		// Check that existing values were preserved and new ones added
+		assert.Equal(t, 7, result["us-east-1"]["event1"]) // 5 + 2
+		assert.Equal(t, 10, result["us-east-1"]["event2"]) // unchanged
+		assert.Equal(t, 1, result["us-east-1"]["event3"]) // new
+		assert.Equal(t, 3, result["us-west-2"]["event3"]) // unchanged
+		assert.Equal(t, 7, result["eu-west-1"]["event4"]) // new region
+	})
+	
+	t.Run("merge with empty existing", func(t *testing.T) {
+		existing := map[string]map[string]int{}
+		
+		new := map[string]map[string]int{
+			"us-east-1": {"event1": 2},
+		}
+		
+		result := cm.MergeCounters(existing, new)
+		assert.Equal(t, 2, result["us-east-1"]["event1"])
+	})
+	
+	t.Run("merge with empty new", func(t *testing.T) {
+		existing := map[string]map[string]int{
+			"us-east-1": {"event1": 5},
+		}
+		
+		new := map[string]map[string]int{}
+		
+		result := cm.MergeCounters(existing, new)
+		assert.Equal(t, 5, result["us-east-1"]["event1"])
+	})
+}
+
+func TestCounterManager_AddCounters(t *testing.T) {
+	mockFS := NewMockFileSystem()
+	cm := NewCounterManager(mockFS, "/tmp", &logger.NoopLogger{})
+	
+	t.Run("add to empty file", func(t *testing.T) {
+		newCounters := map[string]map[string]int{
+			"us-east-1": {"event1": 5, "event2": 3},
+			"us-west-2": {"event3": 2},
+		}
+		
+		err := cm.AddCounters(newCounters)
+		require.NoError(t, err)
+		
+		// Verify counters were written
+		allCounters, err := cm.ReadCounters()
+		require.NoError(t, err)
+		assert.Equal(t, newCounters, allCounters)
+	})
+	
+	t.Run("add to existing file", func(t *testing.T) {
+		// Set up existing counters
+		existingCounters := map[string]map[string]int{
+			"us-east-1": {"event1": 5},
+			"eu-west-1": {"event4": 7},
+		}
+		data, _ := json.Marshal(existingCounters)
+		mockFS.files["/tmp/counters.json"] = data
+		
+		// Add new counters
+		newCounters := map[string]map[string]int{
+			"us-east-1": {"event1": 2, "event2": 3},
+			"us-west-2": {"event3": 1},
+		}
+		
+		err := cm.AddCounters(newCounters)
+		require.NoError(t, err)
+		
+		// Verify merged result
+		allCounters, err := cm.ReadCounters()
+		require.NoError(t, err)
+		
+		// Check specific values
+		assert.Equal(t, 7, allCounters["us-east-1"]["event1"]) // 5 + 2
+		assert.Equal(t, 3, allCounters["us-east-1"]["event2"]) // new
+		assert.Equal(t, 1, allCounters["us-west-2"]["event3"]) // new region
+		assert.Equal(t, 7, allCounters["eu-west-1"]["event4"]) // unchanged
+	})
+}
+
+func TestCTFileBatcher_AddCounters(t *testing.T) {
+	mockFS := NewMockFileSystem()
+	mockFlusher := &MockEMFFlusher{}
+	
+	config := CTFileBatcherConfig{
+		BaseDir:          "/tmp",
+		Namespace:        "TestNamespace",
+		MetricName:       "TestMetric",
+		PropagateInvoker: true,
+		EmfFlusher:       mockFlusher,
+		FileSystem:       mockFS,
+		TimeProvider:     mockTimeProvider,
+		Logger:           &logger.NoopLogger{},
+	}
+	
+	batcher, err := NewCTFileBatcher(config)
+	require.NoError(t, err)
+	
+	t.Run("valid counters", func(t *testing.T) {
+		counters := map[string]map[string]int{
+			"us-east-1": {"TestEvent": 5, "AnotherEvent": 3},
+			"us-west-2": {"TestEvent": 2},
+		}
+		
+		err := batcher.AddCounters(context.Background(), counters)
+		require.NoError(t, err)
+		
+		// Verify counters were stored
+		cm := batcher.(*CTFileBatcher).counterMgr
+		allCounters, err := cm.ReadCounters()
+		require.NoError(t, err)
+		assert.Equal(t, counters, allCounters)
+	})
+	
+	t.Run("invalid region filtered", func(t *testing.T) {
+		// Clear existing files
+		mockFS.files = make(map[string][]byte)
+		
+		counters := map[string]map[string]int{
+			"us-east-1": {"TestEvent": 5},
+			"invalid-region": {"TestEvent": 2},
+		}
+		
+		err := batcher.AddCounters(context.Background(), counters)
+		require.NoError(t, err)
+		
+		// Verify only valid region was stored
+		cm := batcher.(*CTFileBatcher).counterMgr
+		allCounters, err := cm.ReadCounters()
+		require.NoError(t, err)
+		assert.Equal(t, 5, allCounters["us-east-1"]["TestEvent"])
+		_, hasInvalid := allCounters["invalid-region"]
+		assert.False(t, hasInvalid)
+	})
 }

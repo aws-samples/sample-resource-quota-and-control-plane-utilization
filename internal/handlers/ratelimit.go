@@ -79,24 +79,83 @@ func (rlh *RateLimitHandler) HandleEvent(
 ) ([]events.SQSBatchItemFailure, error) {
 	rlh.Logger.Info("Received %d records from SQS event", len(event.Records))
 
-	// Process messages sequentially
+	// Aggregate counters by region
+	regionCounters := make(map[string]map[string]int)
+	var flushCommands []string
 	var failures []events.SQSBatchItemFailure
+	
+	// First pass: process all messages and aggregate counters
 	for _, msg := range event.Records {
-		if failure := rlh.processMessage(ctx, msg); failure != nil {
+		if rlh.isFlushCommand(msg.Body) {
+			// Track flush commands for later processing
+			flushCommands = append(flushCommands, msg.MessageId)
+			continue
+		}
+		
+		// Process CloudTrail event
+		if failure := rlh.aggregateCloudTrailEvent(msg, regionCounters); failure != nil {
 			failures = append(failures, *failure)
 		}
+	}
+	
+	// Second pass: submit aggregated counters if any
+	if len(regionCounters) > 0 {
+		if err := rlh.Batcher.AddCounters(ctx, regionCounters); err != nil {
+			rlh.Logger.Error("failed to add batch counters: %v", err)
+			// If batch fails, mark all CloudTrail messages as failed
+			for _, msg := range event.Records {
+				if !rlh.isFlushCommand(msg.Body) {
+					failures = append(failures, events.SQSBatchItemFailure{ItemIdentifier: msg.MessageId})
+				}
+			}
+		}
+	}
+	
+	// Third pass: process any flush commands
+	for _, messageId := range flushCommands {
+		rlh.handleFlushCommand(ctx, messageId)
 	}
 
 	return failures, nil
 }
 
-// processMessage handles individual SQS message processing.
-func (rlh *RateLimitHandler) processMessage(ctx context.Context, msg events.SQSMessage) *events.SQSBatchItemFailure {
-	if rlh.isFlushCommand(msg.Body) {
-		rlh.handleFlushCommand(ctx, msg.MessageId)
-		return nil
+// aggregateCloudTrailEvent processes a CloudTrail event and adds its counters to the aggregation map.
+func (rlh *RateLimitHandler) aggregateCloudTrailEvent(msg events.SQSMessage, regionCounters map[string]map[string]int) *events.SQSBatchItemFailure {
+	var ctEvent types.CloudTrailEvent
+	if err := json.Unmarshal([]byte(msg.Body), &ctEvent); err != nil {
+		rlh.Logger.Error("failed to unmarshal SQS message %s: %v", msg.MessageId, err)
+		return &events.SQSBatchItemFailure{ItemIdentifier: msg.MessageId}
 	}
-	return rlh.handleCloudTrailEvent(ctx, msg)
+	
+	// Validate region
+	region := ctEvent.AWSRegion
+	if region == "" {
+		rlh.Logger.Error("missing region in CloudTrail event: %s", msg.MessageId)
+		return &events.SQSBatchItemFailure{ItemIdentifier: msg.MessageId}
+	}
+	
+	// Logger automatically sanitizes all string arguments via SanitizingLogger wrapper
+	rlh.Logger.Debug("processing CloudTrail event: eventName=%s region=%s requestId=%s", 
+		ctEvent.EventName, region, ctEvent.RequestID)
+	
+	// Generate counter keys
+	propagateInvoker := false
+	if batcher, ok := rlh.Batcher.(interface{ PropagateInvoker() bool }); ok {
+		propagateInvoker = batcher.PropagateInvoker()
+	}
+	keys := cloudtrail.GenerateCounterKeys(ctEvent, propagateInvoker)
+	
+	// Ensure region map exists
+	if regionCounters[region] == nil {
+		regionCounters[region] = make(map[string]int)
+	}
+	
+	// Update counters for each key
+	for _, key := range keys {
+		regionCounters[region][key]++
+	}
+	
+	return nil
 }
 
 // isFlushCommand checks if message is a flush command.
@@ -115,16 +174,4 @@ func (rlh *RateLimitHandler) handleFlushCommand(ctx context.Context, messageId s
 	rlh.Logger.Info("flushed all CloudTrail EMF records due to flush message %s", messageId)
 }
 
-// handleCloudTrailEvent processes CloudTrail events.
-func (rlh *RateLimitHandler) handleCloudTrailEvent(ctx context.Context, msg events.SQSMessage) *events.SQSBatchItemFailure {
-	var ctEvent types.CloudTrailEvent
-	if err := json.Unmarshal([]byte(msg.Body), &ctEvent); err != nil {
-		// amazonq-ignore-next-line
-		rlh.Logger.Error("failed to unmarshal SQS message %s: %v", msg.MessageId, err)
-		return &events.SQSBatchItemFailure{ItemIdentifier: msg.MessageId}
-	}
-	// Logger automatically sanitizes all string arguments via SanitizingLogger wrapper
-	rlh.Logger.Debug("processing CloudTrail event: eventName=%s region=%s requestId=%s", ctEvent.EventName, ctEvent.AWSRegion, ctEvent.RequestID)
-	rlh.Batcher.Add(ctx, ctEvent.AWSRegion, ctEvent)
-	return nil
-}
+
