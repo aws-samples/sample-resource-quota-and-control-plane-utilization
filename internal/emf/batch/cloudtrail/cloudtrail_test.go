@@ -689,13 +689,22 @@ func TestCTFileBatcher_FlushAll(t *testing.T) {
 		// Verify EMF flusher was called for each region
 		assert.Len(t, mockFlusher.flushCalls, 2)
 		
-		// Check first region
-		assert.Equal(t, "us-east-1", mockFlusher.flushCalls[0].Region)
-		assert.Len(t, mockFlusher.flushCalls[0].Records, 2)
+		// Check that both regions were processed (without assuming order)
+		regionsProcessed := map[string]bool{}
+		recordCounts := map[string]int{}
 		
-		// Check second region
-		assert.Equal(t, "us-west-2", mockFlusher.flushCalls[1].Region)
-		assert.Len(t, mockFlusher.flushCalls[1].Records, 1)
+		for _, call := range mockFlusher.flushCalls {
+			regionsProcessed[call.Region] = true
+			recordCounts[call.Region] = len(call.Records)
+		}
+		
+		// Verify both regions were processed
+		assert.True(t, regionsProcessed["us-east-1"], "us-east-1 should be processed")
+		assert.True(t, regionsProcessed["us-west-2"], "us-west-2 should be processed")
+		
+		// Verify correct number of records for each region
+		assert.Equal(t, 2, recordCounts["us-east-1"])
+		assert.Equal(t, 1, recordCounts["us-west-2"])
 		
 		// Verify counter file was cleared
 		_, exists := mockFS.files["/tmp/counters.json"]

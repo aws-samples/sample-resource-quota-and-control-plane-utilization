@@ -50,6 +50,7 @@ type nauCalculatorV2Impl struct {
 	results     chan eniResult
 	workerCount int
 	workerWg    sync.WaitGroup
+	collectorWg sync.WaitGroup   // WaitGroup for result collector
 }
 
 // NewNauCalculatorV2 creates a new NAU calculator instance for the specified region.
@@ -79,6 +80,7 @@ func (n *nauCalculatorV2Impl) startWorkerPool() {
 	}
 	
 	// Start result collector
+	n.collectorWg.Add(1)
 	go n.collectResults()
 }
 
@@ -98,6 +100,7 @@ func (n *nauCalculatorV2Impl) worker() {
 
 // collectResults processes results from workers and adds records to the store.
 func (n *nauCalculatorV2Impl) collectResults() {
+	defer n.collectorWg.Done()
 	for result := range n.results {
 		if result.err != nil {
 			if errors.Is(result.err, errUnsupportedEni) {
@@ -151,7 +154,8 @@ func (n *nauCalculatorV2Impl) CalculateNau() (map[string]int64, error) {
 	close(n.jobs)
 	n.workerWg.Wait()
 	close(n.results)
-	// Result collector will finish when results channel is drained
+	// Wait for result collector to finish processing all results
+	n.collectorWg.Wait()
 
 	n.logger.Info("Completed calculating Network Address Units for all VPC's in %s", n.region)
 	totals := make(map[string]int64)
