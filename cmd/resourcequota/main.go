@@ -23,11 +23,11 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/serviceconfig"
 	"github.com/outofoffice3/aws-samples/geras/internal/utils"
 
+	"github.com/outofoffice3/aws-samples/geras/internal/job/customjobs/ebs/gp3storage"
 	"github.com/outofoffice3/aws-samples/geras/internal/job/customjobs/ec2/networkinterfaces"
 	"github.com/outofoffice3/aws-samples/geras/internal/job/customjobs/eks/listcluster"
+	"github.com/outofoffice3/aws-samples/geras/internal/job/customjobs/iam/iamroles"
 	"github.com/outofoffice3/aws-samples/geras/internal/job/customjobs/iam/oidcproviders"
-	"github.com/outofoffice3/aws-samples/geras/internal/job/customjobs/support/gp3storage"
-	"github.com/outofoffice3/aws-samples/geras/internal/job/customjobs/support/iamroles"
 	vpcnau "github.com/outofoffice3/aws-samples/geras/internal/job/customjobs/vpc/nau"
 )
 
@@ -94,6 +94,7 @@ var (
 	ErrCreateELBClient          = errors.New("error creating ELB client")
 	ErrCreateServiceQuotaClient = errors.New("error creating Service Quotas client")
 	ErrCreateS3Client           = errors.New("error creating S3 client")
+	ErrCreateEBSClient          = errors.New("error creating EBS client")
 )
 
 // LambdaResponse represents the response returned by the Lambda function.
@@ -580,18 +581,28 @@ func buildJobManager(input BuildJobManagerInput) job.JobManager {
 						}
 					}
 					if qm.Name == "iamRoles" {
+						// Create IAM roles job for each region, but always use us-east-1 for Service Quotas
 						log.Info("creating IAM Roles job for region: %s", region)
-						supportClient, err := clientFactory.CreateSupport(region)
+						iamClient, err := clientFactory.CreateIAM(region)
 						if err != nil {
 							fatal(FatalInput{
 								Logger:  log,
-								ErrType: ErrCreateSupportClient,
+								ErrType: ErrCreateIAMClient,
+								Cause:   err,
+							})
+						}
+						sqClient, err := clientFactory.CreateServiceQuotas(iamServiceQuotaRegion)
+						if err != nil {
+							fatal(FatalInput{
+								Logger:  log,
+								ErrType: ErrCreateServiceQuotaClient,
 								Cause:   err,
 							})
 						}
 						job, err := iamroles.NewIamRoleJob(iamroles.IamRoleJobConfig{
-							SupportClient: supportClient,
-							Logger:        log,
+							IamClient:           iamClient,
+							ServiceQuotasClient: sqClient,
+							Logger:              log,
 						})
 						if err != nil {
 							fatal(FatalInput{
@@ -612,17 +623,26 @@ func buildJobManager(input BuildJobManagerInput) job.JobManager {
 				for _, qm := range svcCfg.QuotaMetrics {
 					if qm.Name == "gp3Storage" {
 						log.Info("creating GP3 storage job for region: %s", region)
-						supportClient, err := clientFactory.CreateSupport(region)
+						ebsClient, err := clientFactory.CreateEBS(region)
 						if err != nil {
 							fatal(FatalInput{
 								Logger:  log,
-								ErrType: ErrCreateSupportClient,
+								ErrType: ErrCreateEBSClient,
+								Cause:   err,
+							})
+						}
+						sqClient, err := clientFactory.CreateServiceQuotas(region)
+						if err != nil {
+							fatal(FatalInput{
+								Logger:  log,
+								ErrType: ErrCreateServiceQuotaClient,
 								Cause:   err,
 							})
 						}
 						job, err := gp3storage.NewGp3StorageJob(gp3storage.Gp3StorageJobConfig{
-							SupportClient: supportClient,
-							Logger:        log,
+							EBSClient:           ebsClient,
+							ServiceQuotasClient: sqClient,
+							Logger:              log,
 						})
 						if err != nil {
 							fatal(FatalInput{

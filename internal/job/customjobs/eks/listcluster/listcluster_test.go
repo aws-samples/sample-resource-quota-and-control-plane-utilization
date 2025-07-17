@@ -13,6 +13,7 @@ import (
 	sqTypes "github.com/aws/aws-sdk-go-v2/service/servicequotas/types"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/eksclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
+	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -117,13 +118,13 @@ func TestListClusterJob_WithYourFakeClient(t *testing.T) {
 			// expected one metric
 			assert.Len(t, met, 1, "should return exactly one metric")
 			got := met[0]
-			assert.Equal(t, cloudwatchMetricName, got.Name, "metric name mismatch")
+			assert.Equal(t, sharedtypes.JobEKSClusterUtilization, got.Name, "metric name mismatch")
 			assert.Equal(t, tc.wantPct, got.Value, "utilization percentage mismatch")
 			assert.True(t, quotaFake.Called, "quota client should be called")
 
 			// also exercise getters
 			assert.Equal(t, "r1", job.GetRegion(), "region mismatch")
-			assert.Contains(t, job.GetJobName(), listClusterJobPrefix, "job name should contain prefix")
+			assert.Contains(t, job.GetJobName(), string(sharedtypes.JobEKSClusterUtilization), "job name should contain metric name")
 		})
 	}
 }

@@ -2,6 +2,8 @@ package listcluster
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -12,12 +14,17 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+)
+
+// Error constants for EKS list clusters job
+var (
+	ErrListClusters     = errors.New("error listing EKS clusters")
+	ErrGetClustersQuota = errors.New("error getting EKS clusters quota")
 )
 
 // ListClusterJob will implment the Job interface
 // It will calculate the total number of clusters in a given region
-
 type ListClusterJob struct {
 	EksClient           eksclient.EKSClient
 	ServiceQuotasClient servicequotaclient.ServiceQuotasClient
@@ -33,8 +40,6 @@ type ListClusterJobConfig struct {
 }
 
 const (
-	listClusterJobPrefix = "listCluster"
-	cloudwatchMetricName = "totalEksClusters"
 	quotaCode            = "L-1194D53C"
 	ServiceCode          = "eks"
 )
@@ -46,17 +51,15 @@ func NewListClusterJob(config ListClusterJobConfig) (job.Job, error) {
 	job := &ListClusterJob{
 		EksClient:           config.EksClient,
 		ServiceQuotasClient: config.ServiceQuotasClient,
-		jobName:             listClusterJobPrefix + "-" + config.EksClient.GetRegion(),
+		jobName:             string(sharedtypes.JobEKSClusterUtilization) + "-" + config.EksClient.GetRegion(),
 		region:              config.EksClient.GetRegion(),
 		Logger:              config.Logger,
 	}
 
 	return job, nil
-
 }
 
-func (lj *ListClusterJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
-
+func (lj *ListClusterJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
 	input := &eks.ListClustersInput{}
 	var totalCount int64 = 0
 
@@ -65,7 +68,8 @@ func (lj *ListClusterJob) Execute(ctx context.Context) ([]types.CloudWatchMetric
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			lj.Logger.Error("%s failed to list EKS clusters: %v", lj.GetJobName(), err)
+			return nil, fmt.Errorf("%w: %v", ErrListClusters, err)
 		}
 		totalCount += int64(len(output.Clusters))
 	}
@@ -78,20 +82,22 @@ func (lj *ListClusterJob) Execute(ctx context.Context) ([]types.CloudWatchMetric
 
 	getServiceQuotaOutput, err := lj.ServiceQuotasClient.GetServiceQuota(ctx, getServiceQuotaInput)
 	if err != nil {
-		return nil, err
+		lj.Logger.Error("%s failed to get EKS clusters quota: %v", lj.GetJobName(), err)
+		return nil, fmt.Errorf("%w: %v", ErrGetClustersQuota, err)
 	}
 	quotaValue := aws.ToFloat64(getServiceQuotaOutput.Quota.Value)
 	utilization := (float64(totalCount) / quotaValue) * 100
 	percent := strconv.FormatFloat(utilization, 'f', -1, 64)
 	lj.Logger.Debug("%s total=%d , quota=%.2f, utilization=%q%%", lj.GetJobName(), totalCount, quotaValue, percent)
-	metric := types.CloudWatchMetric{
-		Name:      cloudwatchMetricName,
+	
+	metric := sharedtypes.CloudWatchMetric{
+		Name:      sharedtypes.JobEKSClusterUtilization,
 		Value:     utilization,
-		Unit:      types.UnitPercent,
+		Unit:      sharedtypes.UnitPercent,
 		Metadata:  nil,
 		Timestamp: time.Now(),
 	}
-	return []types.CloudWatchMetric{metric}, nil
+	return []sharedtypes.CloudWatchMetric{metric}, nil
 }
 
 // GetJobName return the name of the job

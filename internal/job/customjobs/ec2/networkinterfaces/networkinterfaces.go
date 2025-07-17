@@ -4,6 +4,8 @@ package networkinterfaces
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -15,7 +17,13 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+)
+
+// Error constants for network interfaces job
+var (
+	ErrDescribeNetworkInterfaces = errors.New("error describing network interfaces")
+	ErrGetNetworkInterfaceQuota  = errors.New("error getting network interfaces quota")
 )
 
 // NetworkInterfaceJob monitors EC2 network interface usage against service quotas.
@@ -36,9 +44,6 @@ type NetworkInterfaceJobConfig struct {
 }
 
 const (
-	// Job and metric naming constants.
-	networkInterfaceJobPrefix = "networkInterfaces"
-	cloudwatchMetricName      = "networkInterfaces"
 	// AWS Service Quotas identifiers for network interfaces.
 	quotaCode   = "L-DF5E4CA3" // Network interfaces per region quota code
 	servicename = "vpc"        // VPC service name in Service Quotas
@@ -53,7 +58,7 @@ func NewNetworkInterfaceJob(config NetworkInterfaceJobConfig) (job.Job, error) {
 	nic := &NetworkInterfaceJob{
 		ec2Client:           config.Ec2Client,
 		serviceQuotasClient: config.ServiceQuotasClient,
-		jobName:             networkInterfaceJobPrefix + "-" + config.Ec2Client.GetRegion(),
+		jobName:             string(sharedtypes.JobNetworkInterfaceUtilization) + "-" + config.Ec2Client.GetRegion(),
 		region:              config.Ec2Client.GetRegion(),
 		Logger:              config.Logger,
 	}
@@ -63,7 +68,7 @@ func NewNetworkInterfaceJob(config NetworkInterfaceJobConfig) (job.Job, error) {
 
 // Execute counts network interfaces and calculates quota utilization.
 // Returns a CloudWatch metric with the utilization percentage.
-func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
+func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
 	input := &ec2.DescribeNetworkInterfacesInput{}
 	var totalCount int64 = 0
 
@@ -72,7 +77,8 @@ func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]types.CloudWatch
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(ctx)
 		if err != nil {
-			return nil, err
+			nic.Logger.Error("%s failed to describe network interfaces: %v", nic.GetJobName(), err)
+			return nil, fmt.Errorf("%w: %v", ErrDescribeNetworkInterfaces, err)
 		}
 		totalCount += int64(len(output.NetworkInterfaces))
 	}
@@ -85,20 +91,21 @@ func (nic *NetworkInterfaceJob) Execute(ctx context.Context) ([]types.CloudWatch
 
 	getServiceQuotaOutput, err := nic.serviceQuotasClient.GetServiceQuota(ctx, getServiceQuotaInput)
 	if err != nil {
-		return nil, err
+		nic.Logger.Error("%s failed to get network interfaces quota: %v", nic.GetJobName(), err)
+		return nil, fmt.Errorf("%w: %v", ErrGetNetworkInterfaceQuota, err)
 	}
 	quotaValue := aws.ToFloat64(getServiceQuotaOutput.Quota.Value)
 	utilization := (float64(totalCount) / quotaValue) * float64(100)
 	percent := strconv.FormatFloat(utilization, 'f', -1, 64)
 	nic.Logger.Debug("%s total=%d, quota=%.2f, utilization=%q%%", nic.GetJobName(), totalCount, quotaValue, percent)
-	metric := types.CloudWatchMetric{
-		Name:      cloudwatchMetricName,
+	metric := sharedtypes.CloudWatchMetric{
+		Name:      sharedtypes.JobNetworkInterfaceUtilization,
 		Value:     utilization,
-		Unit:      types.UnitPercent,
+		Unit:      sharedtypes.UnitPercent,
 		Metadata:  nil,
 		Timestamp: time.Now(),
 	}
-	return []types.CloudWatchMetric{metric}, nil
+	return []sharedtypes.CloudWatchMetric{metric}, nil
 }
 
 // GetJobName returns the unique identifier for this job.

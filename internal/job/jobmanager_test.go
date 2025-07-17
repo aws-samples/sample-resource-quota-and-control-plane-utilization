@@ -134,7 +134,7 @@ func createTestMetrics(count int, withVPC bool) []types.CloudWatchMetric {
 	metrics := make([]types.CloudWatchMetric, count)
 	for i := 0; i < count; i++ {
 		metric := types.CloudWatchMetric{
-			Name:     fmt.Sprintf("metric-%d", i),
+			Name:     types.JobNetworkInterfaceUtilization, // Use a valid JobName
 			Value:    float64(i * 10),
 			Metadata: make(map[string]string),
 		}

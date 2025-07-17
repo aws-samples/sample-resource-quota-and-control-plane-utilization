@@ -13,6 +13,7 @@ import (
 	sqTypes "github.com/aws/aws-sdk-go-v2/service/servicequotas/types"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/ec2client"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
+	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -63,11 +64,11 @@ func TestExecute_SuccessUsingFakeEC2(t *testing.T) {
 	// should get one metric: (3+2)/10*100 = 50
 	assert.Len(t, met, 1, "should return exactly one metric")
 	m := met[0]
-	assert.Equal(t, cloudwatchMetricName, m.Name, "metric name mismatch")
+	assert.Equal(t, sharedtypes.JobNetworkInterfaceUtilization, m.Name, "metric name mismatch")
 	assert.Equal(t, 50.0, m.Value, "expected 50%% utilization")
 	assert.True(t, q.called, "quota client should be called")
 	assert.Equal(t, "r1", job.GetRegion(), "region mismatch")
-	assert.True(t, startsWith(job.GetJobName(), networkInterfaceJobPrefix+"-r1"), "job name should contain prefix and region")
+	assert.True(t, startsWith(job.GetJobName(), string(sharedtypes.JobNetworkInterfaceUtilization)+"-r1"), "job name should contain metric name and region")
 }
 
 func TestExecute_QuotaError(t *testing.T) {

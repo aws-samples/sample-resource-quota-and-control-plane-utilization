@@ -3,6 +3,7 @@ package oidcproviders
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,8 +160,8 @@ func TestOIDCProviderJob_Execute(t *testing.T) {
 			}
 			m := metrics[0]
 
-			if m.Name != cloudwatchMetricName {
-				t.Errorf("Name = %q, want %q", m.Name, cloudwatchMetricName)
+			if m.Name != sharedtypes.JobOIDCProviderUtilization {
+				t.Errorf("Name = %q, want %q", m.Name, sharedtypes.JobOIDCProviderUtilization)
 			}
 			// allow small time difference
 			if time.Since(m.Timestamp) > time.Second {
@@ -180,8 +181,8 @@ func TestOIDCProviderJob_Execute(t *testing.T) {
 			if job.GetRegion() != "r-1" {
 				t.Errorf("GetRegion = %q, want r-1", job.GetRegion())
 			}
-			if got := job.GetJobName(); got[:len(oidcProvidersJobPrefix)] != oidcProvidersJobPrefix {
-				t.Errorf("GetJobName = %q, want prefix %q", got, oidcProvidersJobPrefix)
+			if got := job.GetJobName(); !strings.Contains(got, string(sharedtypes.JobOIDCProviderUtilization)) {
+				t.Errorf("GetJobName = %q, should contain %q", got, string(sharedtypes.JobOIDCProviderUtilization))
 			}
 		})
 	}

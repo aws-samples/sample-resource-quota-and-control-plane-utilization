@@ -2,6 +2,8 @@ package oidcproviders
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -13,12 +15,17 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
-	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+)
+
+// Error constants for OIDC providers job
+var (
+	ErrListOIDCProviders     = errors.New("error listing OIDC providers")
+	ErrGetOIDCProvidersQuota = errors.New("error getting OIDC providers quota")
 )
 
 // OIDCProvider will implement the Job interface
 // It will calculate the total number of OIDC providers in a given region
-
 type OIDCProviderJob struct {
 	IamClient           iamclient.IamClient
 	ServiceQuotasClient servicequotaclient.ServiceQuotasClient
@@ -34,8 +41,6 @@ type OIDCProviderJobConfig struct {
 }
 
 const (
-	oidcProvidersJobPrefix = "oidcProviders"
-	cloudwatchMetricName   = "oidcProviders"
 	serviceQuotaCode       = "L-858F3967"
 	serviceCode            = "iam"
 )
@@ -48,7 +53,7 @@ func NewOIDCProviderJob(config OIDCProviderJobConfig) (job.Job, error) {
 	job := &OIDCProviderJob{
 		IamClient:           config.IamClient,
 		ServiceQuotasClient: config.ServiceQuotasClient,
-		jobName:             oidcProvidersJobPrefix + "-" + config.IamClient.GetRegion(),
+		jobName:             string(sharedtypes.JobOIDCProviderUtilization) + "-" + config.IamClient.GetRegion(),
 		region:              config.IamClient.GetRegion(),
 		Logger:              config.Logger,
 	}
@@ -57,14 +62,15 @@ func NewOIDCProviderJob(config OIDCProviderJobConfig) (job.Job, error) {
 }
 
 // Execute will return the total number of OIDC providers in a given region
-func (j *OIDCProviderJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
+func (j *OIDCProviderJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
 
 	input := &iam.ListOpenIDConnectProvidersInput{}
 	var totalCount int64 = 0
 	// make call to list oidc providers and calculate total amount
 	oidcProvidersOutput, err := j.IamClient.ListOpenIDConnectProviders(ctx, input)
 	if err != nil {
-		return nil, err
+		j.Logger.Error("%s failed to list OIDC providers: %v", j.GetJobName(), err)
+		return nil, fmt.Errorf("%w: %v", ErrListOIDCProviders, err)
 	}
 
 	totalCount = int64(len(oidcProvidersOutput.OpenIDConnectProviderList))
@@ -77,22 +83,23 @@ func (j *OIDCProviderJob) Execute(ctx context.Context) ([]types.CloudWatchMetric
 
 	getServiceQuotaOutput, err := j.ServiceQuotasClient.GetServiceQuota(ctx, getServiceQuotaInput)
 	if err != nil {
-		return nil, err
+		j.Logger.Error("%s failed to get OIDC providers quota: %v", j.GetJobName(), err)
+		return nil, fmt.Errorf("%w: %v", ErrGetOIDCProvidersQuota, err)
 	}
 	quotaValue := aws.ToFloat64(getServiceQuotaOutput.Quota.Value)
 	utilization := (float64(totalCount) / quotaValue) * float64(100)
 	percent := strconv.FormatFloat(utilization, 'f', -1, 64)
 	j.Logger.Info("%s total=%d, quota=%.2f, utilization=%q%%", j.GetJobName(), totalCount, quotaValue, percent)
 
-	metric := types.CloudWatchMetric{
-		Name:      cloudwatchMetricName,
+	metric := sharedtypes.CloudWatchMetric{
+		Name:      sharedtypes.JobOIDCProviderUtilization,
 		Value:     utilization,
-		Unit:      types.UnitPercent,
+		Unit:      sharedtypes.UnitPercent,
 		Metadata:  nil,
 		Timestamp: time.Now(),
 	}
 
-	return []types.CloudWatchMetric{metric}, nil
+	return []sharedtypes.CloudWatchMetric{metric}, nil
 }
 
 // GetJobName will return the job name

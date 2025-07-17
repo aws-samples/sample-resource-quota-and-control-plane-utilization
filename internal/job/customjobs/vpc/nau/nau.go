@@ -4,6 +4,8 @@ package vpcnau
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"time"
@@ -14,7 +16,13 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/outofoffice3/aws-samples/geras/internal/nau"
-	"github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+	sharedtypes "github.com/outofoffice3/aws-samples/geras/internal/shared/types"
+)
+
+// Error constants for VPC NAU job
+var (
+	ErrCalculateNAU     = errors.New("error calculating NAU")
+	ErrGetNAUQuota      = errors.New("error getting NAU quota")
 )
 
 // VPCNAUJob calculates Network Address Usage (NAU) for each VPC in a region
@@ -35,9 +43,6 @@ type VPCNAUConfig struct {
 }
 
 const (
-	// Job and metric naming constants.
-	VPCNAUJobPrefix      = "vpcNAU"
-	cloudwatchMetricName = "NetworkAddressUsage"
 	// AWS Service Quotas identifiers for VPC NAU.
 	quotaCode   = "L-BB24F6E5" // VPC network address usage quota code
 	serviceCode = "vpc"        // VPC service name in Service Quotas
@@ -55,7 +60,7 @@ func NewVPCNAUJob(
 	job := &VPCNAUJob{
 		nauCalculator:       config.NauCalculator,
 		serviceQuotasClient: config.ServiceQuotasClient,
-		jobName:             VPCNAUJobPrefix + "-" + config.NauCalculator.GetRegion(),
+		jobName:             string(sharedtypes.JobNetworkAddressUnitsUtilization) + "-" + config.NauCalculator.GetRegion(),
 		region:              config.NauCalculator.GetRegion(),
 		Logger:              config.Logger,
 	}
@@ -65,11 +70,12 @@ func NewVPCNAUJob(
 
 // Execute calculates NAU for all VPCs and generates utilization metrics.
 // Returns one CloudWatch metric per VPC with utilization percentage.
-func (j *VPCNAUJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, error) {
+func (j *VPCNAUJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMetric, error) {
 	// Get the raw NAU totals per VPC
 	output, err := j.nauCalculator.CalculateNau()
 	if err != nil {
-		return nil, err
+		j.Logger.Error("%s failed to calculate NAU: %v", j.GetJobName(), err)
+		return nil, fmt.Errorf("%w: %v", ErrCalculateNAU, err)
 	}
 
 	// Capture timestamp once for all metrics
@@ -88,21 +94,22 @@ func (j *VPCNAUJob) Execute(ctx context.Context) ([]types.CloudWatchMetric, erro
 		ServiceCode: aws.String(serviceCode),
 	})
 	if err != nil {
-		return nil, err
+		j.Logger.Error("%s failed to get NAU quota: %v", j.GetJobName(), err)
+		return nil, fmt.Errorf("%w: %v", ErrGetNAUQuota, err)
 	}
 	quotaValue := aws.ToFloat64(getServiceQuotaOutput.Quota.Value)
 
 	// Convert to CloudWatch metrics
-	out := make([]types.CloudWatchMetric, 0, len(keys))
+	out := make([]sharedtypes.CloudWatchMetric, 0, len(keys))
 	for _, vpcId := range keys {
 		j.Logger.Debug("%s calculating nau utilization for %s", j.GetJobName(), vpcId)
 		vpcNAU := output[vpcId]
 		j.Logger.Debug("%s : units %d, quota value %.2f", j.GetJobName(), vpcNAU, quotaValue)
 		nauUtilization := float64(vpcNAU) / float64(quotaValue)
-		metric := types.CloudWatchMetric{
-			Name:      cloudwatchMetricName,
+		metric := sharedtypes.CloudWatchMetric{
+			Name:      sharedtypes.JobNetworkAddressUnitsUtilization,
 			Value:     nauUtilization,
-			Unit:      types.UnitPercent,
+			Unit:      sharedtypes.UnitPercent,
 			Metadata:  map[string]string{"vpc": vpcId},
 			Timestamp: now,
 		}

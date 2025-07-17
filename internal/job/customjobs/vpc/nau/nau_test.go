@@ -63,7 +63,8 @@ func TestNewVPCNAUJob_Getters(t *testing.T) {
 		Logger:              nil,
 	})
 	assert.NoError(t, err, "should construct without error")
-	assert.Equal(t, "vpcNAU-us-test-1", j.GetJobName(), "job name must include prefix and region")
+	expectedJobName := string(sharedtypes.JobNetworkAddressUnitsUtilization) + "-us-test-1"
+	assert.Equal(t, expectedJobName, j.GetJobName(), "job name must include metric name and region")
 	assert.Equal(t, "us-test-1", j.GetRegion(), "region getter should match calculator")
 }
 
@@ -93,7 +94,7 @@ func TestExecute_Success(t *testing.T) {
 	seen := map[string]bool{"vpc-A": false, "vpc-B": false}
 	for _, m := range mets {
 		// name, unit, metadata, timestamp
-		assert.Equal(t, cloudwatchMetricName, m.Name, "metric name should be constant")
+		assert.Equal(t, sharedtypes.JobNetworkAddressUnitsUtilization, m.Name, "metric name should be constant")
 		assert.Equal(t, sharedtypes.UnitPercent, m.Unit, "unit should be percent")
 		v := m.Metadata["vpc"]
 		// valid vpc id
@@ -122,7 +123,8 @@ func TestExecute_CalcError(t *testing.T) {
 
 	mets, err := j.Execute(context.Background())
 	assert.Nil(t, mets, "metrics should be nil on error")
-	assert.Equal(t, want, err, "error must propagate from calculator")
+	assert.ErrorIs(t, err, ErrCalculateNAU, "error should be ErrCalculateNAU")
+	assert.Contains(t, err.Error(), want.Error(), "error should contain original error message")
 }
 
 func TestExecute_QuotaError(t *testing.T) {
@@ -138,5 +140,6 @@ func TestExecute_QuotaError(t *testing.T) {
 
 	mets, err := j.Execute(context.Background())
 	assert.Nil(t, mets, "metrics should be nil on quota error")
-	assert.Equal(t, want, err, "error must propagate from service quota client")
+	assert.ErrorIs(t, err, ErrGetNAUQuota, "error should be ErrGetNAUQuota")
+	assert.Contains(t, err.Error(), want.Error(), "error should contain original error message")
 }

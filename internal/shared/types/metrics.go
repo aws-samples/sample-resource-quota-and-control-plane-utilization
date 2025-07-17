@@ -36,7 +36,7 @@ func (u MetricUnit) Validate() error {
 // CloudWatchMetric represents a metric data point to be sent to CloudWatch,
 // including value, unit, timestamp, and associated metadata.
 type CloudWatchMetric struct {
-	Name      string            `json:"name"`      // Metric name
+	Name      JobName           `json:"name"`      // Metric name (strongly typed)
 	Value     float64           `json:"value"`     // Metric value
 	Unit      MetricUnit        `json:"unit"`      // Metric unit
 	Timestamp time.Time         `json:"timestamp"` // Metric timestamp
@@ -44,8 +44,11 @@ type CloudWatchMetric struct {
 }
 
 // NewCloudWatchMetric creates a new CloudWatch metric with validation.
-func NewCloudWatchMetric(name string, value float64, unit MetricUnit) (*CloudWatchMetric, error) {
+func NewCloudWatchMetric(name JobName, value float64, unit MetricUnit) (*CloudWatchMetric, error) {
 	if err := unit.Validate(); err != nil {
+		return nil, err
+	}
+	if err := name.Validate(); err != nil {
 		return nil, err
 	}
 	return &CloudWatchMetric{

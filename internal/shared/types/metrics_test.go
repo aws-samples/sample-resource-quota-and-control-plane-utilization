@@ -58,14 +58,15 @@ func TestMetricUnit_Constants(t *testing.T) {
 func TestNewCloudWatchMetric(t *testing.T) {
 	tests := []struct {
 		name     string
-		metName  string
+		metName  JobName
 		value    float64
 		unit     MetricUnit
 		wantErr  bool
 	}{
-		{"valid count", "test-metric", 42.0, UnitCount, false},
-		{"valid percent", "test-metric", 85.5, UnitPercent, false},
-		{"invalid unit", "test-metric", 10.0, "Invalid", true},
+		{"valid count", JobNetworkInterfaceUtilization, 42.0, UnitCount, false},
+		{"valid percent", JobGP3StorageUtilization, 85.5, UnitPercent, false},
+		{"invalid unit", JobIAMRoleUtilization, 10.0, "Invalid", true},
+		{"invalid job name", "InvalidJobName", 10.0, UnitCount, true},
 	}
 	
 	for _, tt := range tests {
@@ -97,7 +98,7 @@ func TestNewCloudWatchMetric(t *testing.T) {
 }
 
 func TestNewCloudWatchMetric_InvalidUnit(t *testing.T) {
-	_, err := NewCloudWatchMetric("test", 10.0, "InvalidUnit")
+	_, err := NewCloudWatchMetric(JobNetworkInterfaceUtilization, 10.0, "InvalidUnit")
 	if err == nil {
 		t.Error("NewCloudWatchMetric with invalid unit should return error")
 	}
@@ -106,10 +107,20 @@ func TestNewCloudWatchMetric_InvalidUnit(t *testing.T) {
 	}
 }
 
+func TestNewCloudWatchMetric_InvalidJobName(t *testing.T) {
+	_, err := NewCloudWatchMetric("InvalidJobName", 10.0, UnitCount)
+	if err == nil {
+		t.Error("NewCloudWatchMetric with invalid job name should return error")
+	}
+	if !errors.Is(err, ErrInvalidJobName) {
+		t.Errorf("NewCloudWatchMetric error = %v, want wrapped ErrInvalidJobName", err)
+	}
+}
+
 func TestCloudWatchMetric_JSONSerialization(t *testing.T) {
 	timestamp := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 	metric := CloudWatchMetric{
-		Name:      "test-metric",
+		Name:      JobNetworkInterfaceUtilization,
 		Value:     42.5,
 		Unit:      UnitPercent,
 		Timestamp: timestamp,
@@ -148,7 +159,7 @@ func TestCloudWatchMetric_JSONSerialization(t *testing.T) {
 
 func TestCloudWatchMetric_DefaultTimestamp(t *testing.T) {
 	before := time.Now()
-	metric, err := NewCloudWatchMetric("test", 10.0, UnitCount)
+	metric, err := NewCloudWatchMetric(JobNetworkInterfaceUtilization, 10.0, UnitCount)
 	after := time.Now()
 	
 	if err != nil {
@@ -161,18 +172,18 @@ func TestCloudWatchMetric_DefaultTimestamp(t *testing.T) {
 }
 
 func TestNewCloudWatchMetric_EmptyName(t *testing.T) {
-	// Constructor doesn't validate name, but we can test it accepts empty names
-	metric, err := NewCloudWatchMetric("", 10.0, UnitCount)
-	if err != nil {
-		t.Errorf("NewCloudWatchMetric with empty name should not error, got %v", err)
+	// Constructor should validate name
+	_, err := NewCloudWatchMetric("", 10.0, UnitCount)
+	if err == nil {
+		t.Error("NewCloudWatchMetric with empty name should return error")
 	}
-	if metric.Name != "" {
-		t.Errorf("NewCloudWatchMetric().Name = %q, want \"\"", metric.Name)
+	if !errors.Is(err, ErrInvalidJobName) {
+		t.Errorf("NewCloudWatchMetric error = %v, want wrapped ErrInvalidJobName", err)
 	}
 }
 
 func TestNewCloudWatchMetric_ZeroValue(t *testing.T) {
-	metric, err := NewCloudWatchMetric("test", 0.0, UnitCount)
+	metric, err := NewCloudWatchMetric(JobNetworkInterfaceUtilization, 0.0, UnitCount)
 	if err != nil {
 		t.Errorf("NewCloudWatchMetric with zero value should not error, got %v", err)
 	}
@@ -182,7 +193,7 @@ func TestNewCloudWatchMetric_ZeroValue(t *testing.T) {
 }
 
 func TestNewCloudWatchMetric_NilMetadata(t *testing.T) {
-	metric, err := NewCloudWatchMetric("test", 10.0, UnitCount)
+	metric, err := NewCloudWatchMetric(JobNetworkInterfaceUtilization, 10.0, UnitCount)
 	if err != nil {
 		t.Fatalf("NewCloudWatchMetric() error = %v", err)
 	}

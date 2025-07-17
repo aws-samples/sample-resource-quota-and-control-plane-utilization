@@ -153,9 +153,17 @@ func (mb *MetricsBatcher) Add(ctx context.Context, m types.CloudWatchMetric) {
 	if err != nil {
 		m.Unit = types.UnitPercent
 	}
+	
+	// Validate job name
+	err = m.Name.Validate()
+	if err != nil {
+		mb.logger.Error("Invalid job name: %v", err)
+		return
+	}
+	
 	rec, err := mb.emfBuilder.Build(builder.EMFInput{
 		Namespace:  mb.namespace,
-		MetricName: m.Name,
+		MetricName: m.Name.String(), // Convert JobName to string
 		Value:      m.Value,
 		Unit:       m.Unit.String(),
 		Dimensions: BuildDimensions(m.Metadata),

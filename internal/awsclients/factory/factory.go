@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
 	"github.com/aws/aws-sdk-go-v2/service/support"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
+	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/ebsclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/ec2client"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/eksclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/iamclient"
@@ -50,6 +51,8 @@ type ClientFactory interface {
 	CreateCloudWatchLogs(region string) (cwlclient.CloudWatchLogsClient, error)
 	// CreateS3 creates a new S3 client for the specified region.
 	CreateS3(region string) (s3client.S3Client, error)
+	// CreateEBS creates a new EBS client for the specified region.
+	CreateEBS(region string) (ebsclient.EBSClient, error)
 }
 
 // factory implements the ClientFactory interface with shared AWS configuration.
@@ -226,6 +229,22 @@ func (f *factory) CreateS3(region string) (s3client.S3Client, error) {
 		return nil, err
 	}
 	return s3Client, nil
+}
+
+// CreateEBS creates a new EBS client for the specified region
+func (f *factory) CreateEBS(region string) (ebsclient.EBSClient, error) {
+	if err := f.validateRegion(region); err != nil {
+		return nil, err
+	}
+	client := ec2.NewFromConfig(f.baseCfg, func(o *ec2.Options) {
+		o.Region = region
+	})
+	ebsClient, err := ebsclient.NewEBSClient(client, region)
+	if err != nil {
+		return nil, err
+	}
+	f.Logger.Debug(clientCreatedMsg, "ebs", region)
+	return ebsClient, nil
 }
 
 // InitClientFactory is a convenience function that creates a new ClientFactory.

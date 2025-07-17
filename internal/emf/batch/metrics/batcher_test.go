@@ -55,7 +55,7 @@ var (
 		Payload: []byte(`{"test": "payload"}`),
 	}
 	testMetric = sharedTypes.CloudWatchMetric{
-		Name:      "TestMetric",
+		Name:      sharedTypes.JobNetworkInterfaceUtilization,
 		Value:     42.0,
 		Unit:      sharedTypes.UnitPercent,
 		Timestamp: time.Now(),
