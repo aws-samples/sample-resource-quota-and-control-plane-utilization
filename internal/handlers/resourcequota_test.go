@@ -14,7 +14,6 @@ import (
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/iamclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/s3client"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/supportclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/emf/batch/metrics"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
@@ -64,14 +63,6 @@ func (m *MockClientFactory) CreateServiceQuotas(region string) (servicequotaclie
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(servicequotaclient.ServiceQuotasClient), args.Error(1)
-}
-
-func (m *MockClientFactory) CreateSupport(region string) (supportclient.SupportClient, error) {
-	args := m.Called(region)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(supportclient.SupportClient), args.Error(1)
 }
 
 func (m *MockClientFactory) CreateCloudWatchLogs(region string) (cwlclient.CloudWatchLogsClient, error) {

@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/ebsclient"
+	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/ec2client"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/job"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
@@ -27,7 +27,7 @@ var (
 // Gp3StorageJob will implement the Job interface
 // It will calculate the total GP3 storage used and utilization percentage
 type Gp3StorageJob struct {
-	ebsClient           ebsclient.EBSClient
+	ec2Client           ec2client.Ec2Client
 	serviceQuotasClient servicequotaclient.ServiceQuotasClient
 	jobName             string
 	region              string
@@ -35,7 +35,7 @@ type Gp3StorageJob struct {
 }
 
 type Gp3StorageJobConfig struct {
-	EBSClient           ebsclient.EBSClient
+	Ec2Client           ec2client.Ec2Client
 	ServiceQuotasClient servicequotaclient.ServiceQuotasClient
 	Logger              logger.Logger
 }
@@ -53,10 +53,10 @@ func NewGp3StorageJob(config Gp3StorageJobConfig) (job.Job, error) {
 	}
 
 	job := &Gp3StorageJob{
-		ebsClient:           config.EBSClient,
+		ec2Client:           config.Ec2Client,
 		serviceQuotasClient: config.ServiceQuotasClient,
-		jobName:             string(sharedtypes.JobGP3StorageUtilization) + "-" + config.EBSClient.GetRegion(),
-		region:              config.EBSClient.GetRegion(),
+		jobName:             string(sharedtypes.JobGP3StorageUtilization) + "-" + config.Ec2Client.GetRegion(),
+		region:              config.Ec2Client.GetRegion(),
 		Logger:              config.Logger,
 	}
 
@@ -74,7 +74,7 @@ func (j *Gp3StorageJob) Execute(ctx context.Context) ([]sharedtypes.CloudWatchMe
 	var totalSizeBytes int64 = 0
 
 	// Use paginator to retrieve all GP3 volumes
-	paginator := ec2.NewDescribeVolumesPaginator(j.ebsClient, &ec2.DescribeVolumesInput{
+	paginator := ec2.NewDescribeVolumesPaginator(j.ec2Client, &ec2.DescribeVolumesInput{
 		Filters: []types.Filter{filter},
 	})
 	

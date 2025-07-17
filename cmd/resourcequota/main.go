@@ -96,7 +96,6 @@ var (
 	ErrCreateELBClient          = errors.New("error creating ELB client")
 	ErrCreateServiceQuotaClient = errors.New("error creating Service Quotas client")
 	ErrCreateS3Client           = errors.New("error creating S3 client")
-	ErrCreateEBSClient          = errors.New("error creating EBS client")
 )
 
 // LambdaResponse represents the response returned by the Lambda function.
@@ -625,11 +624,11 @@ func buildJobManager(input BuildJobManagerInput) job.JobManager {
 				for _, qm := range svcCfg.QuotaMetrics {
 					if strings.EqualFold(qm.Name, constants.JobGP3Storage) {
 						log.Info("creating GP3 storage job for region: %s", region)
-						ebsClient, err := clientFactory.CreateEBS(region)
+						ec2Client, err := clientFactory.CreateEC2(region)
 						if err != nil {
 							fatal(FatalInput{
 								Logger:  log,
-								ErrType: ErrCreateEBSClient,
+								ErrType: ErrCreateEC2Client,
 								Cause:   err,
 							})
 						}
@@ -642,7 +641,7 @@ func buildJobManager(input BuildJobManagerInput) job.JobManager {
 							})
 						}
 						job, err := gp3storage.NewGp3StorageJob(gp3storage.Gp3StorageJobConfig{
-							EBSClient:           ebsClient,
+							Ec2Client:           ec2Client,
 							ServiceQuotasClient: sqClient,
 							Logger:              log,
 						})

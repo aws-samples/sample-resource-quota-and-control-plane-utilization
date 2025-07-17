@@ -138,3 +138,17 @@ func TestEc2ClientImpl_DescribeTransitGatewayVpcAttachments(t *testing.T) {
 	assert.Error(t, err, "client is nil, should return error")
 	assert.Nil(t, output, "output should be nil")
 }
+
+// TestEc2ClientImpl_DescribeVolumes tests the DescribeVolumes method
+func TestEc2ClientImpl_DescribeVolumes(t *testing.T) {
+	ec2Client := ec2.NewFromConfig(aws.Config{})
+	client := ec2ClientImpl{
+		client: ec2Client,
+	}
+	ctx := context.Background()
+	input := &ec2.DescribeVolumesInput{}
+
+	output, err := client.DescribeVolumes(ctx, input)
+	assert.Error(t, err, "client is nil, should return error")
+	assert.Nil(t, output, "output should be nil")
+}

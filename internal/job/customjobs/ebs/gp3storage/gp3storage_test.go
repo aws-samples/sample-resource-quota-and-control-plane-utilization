@@ -17,15 +17,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// fakeEBSClient implements ebsclient.EBSClient
-type fakeEBSClient struct {
+// fakeEC2Client implements ec2client.Ec2Client for testing
+type fakeEC2Client struct {
 	Region               string
 	DescribeVolumesPages []*ec2.DescribeVolumesOutput
 	ErrOnDescribeVolumes int
 	callCount            int
 }
 
-func (f *fakeEBSClient) DescribeVolumes(
+func (f *fakeEC2Client) DescribeVolumes(
 	ctx context.Context,
 	params *ec2.DescribeVolumesInput,
 	optFns ...func(*ec2.Options),
@@ -67,7 +67,36 @@ func (f *fakeEBSClient) DescribeVolumes(
 	return out, nil
 }
 
-func (f *fakeEBSClient) GetRegion() string { return f.Region }
+// Implement other required methods of the Ec2Client interface with empty implementations
+func (f *fakeEC2Client) DescribeVpcs(ctx context.Context, params *ec2.DescribeVpcsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error) {
+	return nil, nil
+}
+
+func (f *fakeEC2Client) DescribeNetworkInterfaces(ctx context.Context, params *ec2.DescribeNetworkInterfacesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error) {
+	return nil, nil
+}
+
+func (f *fakeEC2Client) DescribeNatGateways(ctx context.Context, params *ec2.DescribeNatGatewaysInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNatGatewaysOutput, error) {
+	return nil, nil
+}
+
+func (f *fakeEC2Client) DescribeVpcEndpoints(ctx context.Context, params *ec2.DescribeVpcEndpointsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVpcEndpointsOutput, error) {
+	return nil, nil
+}
+
+func (f *fakeEC2Client) DescribeSubnets(ctx context.Context, params *ec2.DescribeSubnetsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error) {
+	return nil, nil
+}
+
+func (f *fakeEC2Client) DescribeTransitGatewayVpcAttachments(ctx context.Context, params *ec2.DescribeTransitGatewayVpcAttachmentsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeTransitGatewayVpcAttachmentsOutput, error) {
+	return nil, nil
+}
+
+func (f *fakeEC2Client) DescribeAvailabilityZones(ctx context.Context, params *ec2.DescribeAvailabilityZonesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error) {
+	return nil, nil
+}
+
+func (f *fakeEC2Client) GetRegion() string { return f.Region }
 
 // fakeQuotaClient implements servicequotaclient.ServiceQuotasClient
 type fakeQuotaClient struct {
@@ -170,7 +199,7 @@ func TestGp3StorageJob_Execute(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ebsFake := &fakeEBSClient{
+			ec2Fake := &fakeEC2Client{
 				Region:               "us-east-1",
 				DescribeVolumesPages: tc.volumePages,
 				ErrOnDescribeVolumes: tc.errOnPage,
@@ -183,7 +212,7 @@ func TestGp3StorageJob_Execute(t *testing.T) {
 			}
 
 			cfg := Gp3StorageJobConfig{
-				EBSClient:           ebsFake,
+				Ec2Client:           ec2Fake,
 				ServiceQuotasClient: quotaFake,
 			}
 			if !tc.useNilLogger {

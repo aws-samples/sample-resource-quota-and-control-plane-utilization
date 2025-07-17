@@ -15,15 +15,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/servicequotas"
-	"github.com/aws/aws-sdk-go-v2/service/support"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/ebsclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/ec2client"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/eksclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/iamclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/s3client"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/servicequotaclient"
-	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/supportclient"
 	"github.com/outofoffice3/aws-samples/geras/internal/logger"
 	"github.com/outofoffice3/aws-samples/geras/internal/utils"
 )
@@ -45,14 +42,10 @@ type ClientFactory interface {
 	CreateIAM(region string) (iamclient.IamClient, error)
 	// CreateServiceQuotas creates a new Service Quotas client for the specified region.
 	CreateServiceQuotas(region string) (servicequotaclient.ServiceQuotasClient, error)
-	// CreateSupport creates a new Support client for the specified region.
-	CreateSupport(region string) (supportclient.SupportClient, error)
 	// CreateCloudWatchLogs creates a new CloudWatch Logs client for the specified region.
 	CreateCloudWatchLogs(region string) (cwlclient.CloudWatchLogsClient, error)
 	// CreateS3 creates a new S3 client for the specified region.
 	CreateS3(region string) (s3client.S3Client, error)
-	// CreateEBS creates a new EBS client for the specified region.
-	CreateEBS(region string) (ebsclient.EBSClient, error)
 }
 
 // factory implements the ClientFactory interface with shared AWS configuration.
@@ -177,26 +170,6 @@ func (f *factory) CreateServiceQuotas(region string) (servicequotaclient.Service
 	return serviceQuotasClient, nil
 }
 
-// CreateSupport creates a new Support client for the specified region
-func (f *factory) CreateSupport(region string) (supportclient.SupportClient, error) {
-	// validate region is valid
-	if err := f.validateRegion(region); err != nil {
-		return nil, err
-	}
-
-	client := support.NewFromConfig(f.baseCfg, func(o *support.Options) {
-		o.Region = region
-	})
-
-	supportClient, err := supportclient.NewSupportClient(client, region)
-	if err != nil {
-		return nil, err
-	}
-
-	f.Logger.Debug(clientCreatedMsg, "support", region)
-	return supportClient, nil
-}
-
 // CreateCloudWatchLogs creates a new CloudWatch Logs client for the specified region
 func (f *factory) CreateCloudWatchLogs(region string) (cwlclient.CloudWatchLogsClient, error) {
 	// validate region is valid
@@ -231,21 +204,7 @@ func (f *factory) CreateS3(region string) (s3client.S3Client, error) {
 	return s3Client, nil
 }
 
-// CreateEBS creates a new EBS client for the specified region
-func (f *factory) CreateEBS(region string) (ebsclient.EBSClient, error) {
-	if err := f.validateRegion(region); err != nil {
-		return nil, err
-	}
-	client := ec2.NewFromConfig(f.baseCfg, func(o *ec2.Options) {
-		o.Region = region
-	})
-	ebsClient, err := ebsclient.NewEBSClient(client, region)
-	if err != nil {
-		return nil, err
-	}
-	f.Logger.Debug(clientCreatedMsg, "ebs", region)
-	return ebsClient, nil
-}
+
 
 // InitClientFactory is a convenience function that creates a new ClientFactory.
 // It's an alias for NewFactory to maintain backward compatibility.

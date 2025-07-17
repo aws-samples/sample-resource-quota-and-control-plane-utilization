@@ -129,22 +129,6 @@ func TestClientCreation(t *testing.T) {
 			wantErr: true, // Now returns error for invalid region
 		},
 		{
-			name:   "CreateSupport with valid region",
-			region: validRegion,
-			clientFunc: func(region string) (interface{}, error) {
-				return f.CreateSupport(region)
-			},
-			wantErr: false,
-		},
-		{
-			name:   "CreateSupport with invalid region",
-			region: invalidRegion,
-			clientFunc: func(region string) (interface{}, error) {
-				return f.CreateSupport(region)
-			},
-			wantErr: true, // Now returns error for invalid region
-		},
-		{
 			name:   "CreateCloudWatchLogs with valid region",
 			region: validRegion,
 			clientFunc: func(region string) (interface{}, error) {
@@ -220,9 +204,6 @@ func TestErrorHandling(t *testing.T) {
 	assert.Error(t, err)
 
 	_, err = f.CreateServiceQuotas(invalidRegion)
-	assert.Error(t, err)
-
-	_, err = f.CreateSupport(invalidRegion)
 	assert.Error(t, err)
 
 	_, err = f.CreateCloudWatchLogs(invalidRegion)

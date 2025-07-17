@@ -34,6 +34,8 @@ type Ec2Client interface {
 	DescribeTransitGatewayVpcAttachments(ctx context.Context, params *ec2.DescribeTransitGatewayVpcAttachmentsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeTransitGatewayVpcAttachmentsOutput, error)
 	// DescribeAvailabilityZones retrieves information about Availability Zones.
 	DescribeAvailabilityZones(ctx context.Context, params *ec2.DescribeAvailabilityZonesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error)
+	// DescribeVolumes retrieves information about EBS volumes.
+	DescribeVolumes(ctx context.Context, params *ec2.DescribeVolumesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error)
 }
 
 // ec2ClientImpl implements the Ec2Client interface using the AWS SDK.
@@ -93,4 +95,9 @@ func (c *ec2ClientImpl) DescribeTransitGatewayVpcAttachments(ctx context.Context
 // DescribeAvailabilityZones retrieves information about Availability Zones
 func (c *ec2ClientImpl) DescribeAvailabilityZones(ctx context.Context, params *ec2.DescribeAvailabilityZonesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error) {
 	return c.client.DescribeAvailabilityZones(ctx, params, optFns...)
+}
+
+// DescribeVolumes retrieves information about EBS volumes
+func (c *ec2ClientImpl) DescribeVolumes(ctx context.Context, params *ec2.DescribeVolumesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error) {
+	return c.client.DescribeVolumes(ctx, params, optFns...)
 }

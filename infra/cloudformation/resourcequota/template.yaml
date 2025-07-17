@@ -64,10 +64,6 @@ Resources:
                 Action:
                   # EC2
                   - ec2:DescribeNetworkInterfaces
-                  - ec2:DescribeNatGateways
-                  - ec2:DescribeVpcEndpoints
-                  - ec2:DescribeSubnets
-                  - ec2:DescribeTransitGatewayVpcAttachments
                   - ec2:DescribeVolumes
                   - ec2:DescribeVpcs
                   # EKS
@@ -75,13 +71,6 @@ Resources:
                   # IAM
                   - iam:ListOpenIDConnectProviders
                   - iam:ListRoles
-                  # Support
-                  - support:RefreshTrustedAdvisorCheck
-                  # ELBv2
-                  - elasticloadbalancing:DescribeLoadBalancers
-                  # EFS
-                  - elasticfilesystem:DescribeFileSystems
-                  - elasticfilesystem:DescribeMountTargets
                   # CloudWatchLogs
                   - logs:DescribeLogGroups
                   - logs:CreateLogGroup

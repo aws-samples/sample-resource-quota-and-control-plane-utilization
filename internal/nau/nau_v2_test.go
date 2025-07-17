@@ -583,6 +583,9 @@ func (m *testEC2Client) DescribeVpcEndpoints(ctx context.Context, input *ec2.Des
 func (m *testEC2Client) DescribeAvailabilityZones(ctx context.Context, input *ec2.DescribeAvailabilityZonesInput, opts ...func(*ec2.Options)) (*ec2.DescribeAvailabilityZonesOutput, error) {
 	return &ec2.DescribeAvailabilityZonesOutput{}, nil
 }
+func (m *testEC2Client) DescribeVolumes(ctx context.Context, input *ec2.DescribeVolumesInput, opts ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error) {
+	return &ec2.DescribeVolumesOutput{}, nil
+}
 
 func TestNauCalculatorV2_GetRegion(t *testing.T) {
 	mockEC2 := &testEC2Client{region: "us-west-2"}

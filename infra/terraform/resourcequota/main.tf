@@ -53,20 +53,11 @@ resource "aws_iam_role_policy" "resource_quota" {
         Effect   = "Allow"
         Action   = [
           # EC2
-          "ec2:DescribeNetworkInterfaces","ec2:DescribeNatGateways",
-          "ec2:DescribeVpcEndpoints","ec2:DescribeSubnets",
-          "ec2:DescribeTransitGatewayVpcAttachments","ec2:DescribeVpcs",
+          "ec2:DescribeNetworkInterfaces","ec2:DescribeVolumes","ec2:DescribeVpcs",
           # EKS
           "eks:ListClusters",
           # IAM
           "iam:ListOpenIDConnectProviders","iam:ListRoles",
-          # Support
-          "support:RefreshTrustedAdvisorCheck",
-          # ELBv2
-          "elasticloadbalancing:DescribeLoadBalancers",
-          # EFS
-          "elasticfilesystem:DescribeFileSystems",
-          "elasticfilesystem:DescribeMountTargets",
           # CloudWatchLogs
           "logs:DescribeLogGroups","logs:CreateLogGroup",
           "logs:DescribeLogStreams","logs:CreateLogStream",

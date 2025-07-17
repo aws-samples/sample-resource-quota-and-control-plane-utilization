@@ -19,16 +19,18 @@ type FakeEC2Client struct {
 	DescribeNetworkInterfacesPages            []*ec2.DescribeNetworkInterfacesOutput
 	DescribeSubnetsPages                      []*ec2.DescribeSubnetsOutput
 	DescribeTransitGatewayVpcAttachmentsPages []*ec2.DescribeTransitGatewayVpcAttachmentsOutput
+	DescribeVolumesPages                      []*ec2.DescribeVolumesOutput
 
 	// simple (non-paginated) responses:
 	NatGateways  []ec2Types.NatGateway
 	VpcEndpoints []ec2Types.VpcEndpoint
 
-	// “throw on this call index” for each paginated method:
+	// "throw on this call index" for each paginated method:
 	ErrOnDescribeVpcsCall         int
 	ErrOnDescribeENICall          int
 	ErrOnDescribeSubnetCall       int
 	ErrOnDescribeTGWVpcAttachCall int
+	ErrOnDescribeVolumesCall      int
 
 	// simple error flags:
 	ErrNat         bool
@@ -39,6 +41,7 @@ type FakeEC2Client struct {
 	callENICount              int
 	callSubnetCount           int
 	callTGWVpcAttachCount     int
+	callVolumesCount          int
 	callDescribeVpcsNextCount int
 }
 
@@ -257,12 +260,55 @@ func (f *FakeEC2Client) DescribeAvailabilityZones(
 	return &ec2.DescribeAvailabilityZonesOutput{}, nil
 }
 
+// DescribeVolumes pages DescribeVolumesPages.
+func (f *FakeEC2Client) DescribeVolumes(
+	ctx context.Context,
+	in *ec2.DescribeVolumesInput,
+	optFns ...func(*ec2.Options),
+) (*ec2.DescribeVolumesOutput, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	if f.callVolumesCount == f.ErrOnDescribeVolumesCall {
+		return nil, errors.New("ec2 DescribeVolumes injected error")
+	}
+
+	idx := 0
+	if in.NextToken != nil {
+		i, err := strconv.Atoi(*in.NextToken)
+		if err != nil {
+			return nil, err
+		}
+		idx = i
+	}
+
+	var out *ec2.DescribeVolumesOutput
+	if idx < len(f.DescribeVolumesPages) {
+		page := f.DescribeVolumesPages[idx]
+		out = &ec2.DescribeVolumesOutput{
+			Volumes: page.Volumes,
+		}
+	} else {
+		out = &ec2.DescribeVolumesOutput{}
+	}
+
+	if idx+1 < len(f.DescribeVolumesPages) {
+		out.NextToken = aws.String(strconv.Itoa(idx + 1))
+	}
+	f.callVolumesCount++
+	return out, nil
+}
+
 // Reset clears all internal counters.
 func (f *FakeEC2Client) Reset() {
 	f.callVpcsCount = 0
 	f.callENICount = 0
 	f.callSubnetCount = 0
 	f.callTGWVpcAttachCount = 0
+	f.callVolumesCount = 0
 }
 
 // GetRegion returns the configured region.
