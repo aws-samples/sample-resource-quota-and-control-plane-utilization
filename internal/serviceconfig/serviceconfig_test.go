@@ -6,16 +6,6 @@ import (
 	"testing"
 )
 
-type errorReader struct{}
-
-func (e *errorReader) Read(p []byte) (int, error) {
-	return 0, errors.New("read error")
-}
-
-func (e *errorReader) Close() error {
-	return nil
-}
-
 // ---- TESTS ----
 
 func TestLoadConfigFromFile(t *testing.T) {
@@ -59,86 +49,40 @@ func TestLoadConfigFromFile(t *testing.T) {
 	})
 }
 
-func TestValidateFunctions(t *testing.T) {
+func TestValidateQuotaMetric(t *testing.T) {
 	tests := []struct {
 		name      string
-		validate  func(ServiceConfig) error
-		input     ServiceConfig
+		service   string
+		metric    string
 		wantError bool
 	}{
-		{
-			name:      "valid EC2",
-			validate:  ValidateEC2QuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "networkInterfaces"}}},
-			wantError: false,
-		},
-		{
-			name:      "invalid EC2",
-			validate:  ValidateEC2QuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "wrong"}}},
-			wantError: true,
-		},
-		{
-			name:      "valid EKS",
-			validate:  ValidateEKSQuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "listClusters"}}},
-			wantError: false,
-		},
-		{
-			name:      "invalid EKS",
-			validate:  ValidateEKSQuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "wrong"}}},
-			wantError: true,
-		},
-		{
-			name:      "valid IAM iamRoles",
-			validate:  ValidateIAMQuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "iamRoles"}}},
-			wantError: false,
-		},
-		{
-			name:      "valid IAM oidcProviders",
-			validate:  ValidateIAMQuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "oidcProviders"}}},
-			wantError: false,
-		},
-		{
-			name:      "invalid IAM",
-			validate:  ValidateIAMQuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "wrong"}}},
-			wantError: true,
-		},
-		{
-			name:      "valid EBS",
-			validate:  ValidateEBSQuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "gp3storage"}}},
-			wantError: false,
-		},
-		{
-			name:      "invalid EBS",
-			validate:  ValidateEBSQuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "wrong"}}},
-			wantError: true,
-		},
-		{
-			name:      "valid VPC",
-			validate:  ValidateVPCQuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "nau"}}},
-			wantError: false,
-		},
-		{
-			name:      "invalid VPC",
-			validate:  ValidateVPCQuotaMetrics,
-			input:     ServiceConfig{QuotaMetrics: []QuotaMetric{{Name: "wrong"}}},
-			wantError: true,
-		},
+		{"valid ec2 metric", "ec2", "networkInterfaces", false},
+		{"invalid ec2 metric", "ec2", "wrong", true},
+		{"valid eks metric", "eks", "listClusters", false},
+		{"valid iam metric", "iam", "iamRoles", false},
+		{"valid iam metric 2", "iam", "oidcProviders", false},
+		{"valid ebs metric", "ebs", "gp3Storage", false},
+		{"valid vpc metric", "vpc", "nau", false},
+		{"unknown service", "unknown", "metric", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.validate(tt.input)
+			cfg := TopLevelServiceConfig{
+				Services: map[string]ServiceConfig{
+					tt.service: {QuotaMetrics: []QuotaMetric{{Name: tt.metric}}},
+				},
+			}
+			err := ValidateQuotaMetricConfig(cfg, nil)
 			if (err != nil) != tt.wantError {
-				t.Errorf("expected error=%v, got error=%v", tt.wantError, err != nil)
+				t.Errorf("ValidateQuotaMetricConfig() error = %v, wantError %v", err, tt.wantError)
+			}
+			if err != nil && tt.wantError {
+				if tt.service == "unknown" && !errors.Is(err, ErrUnsupportedService) {
+					t.Errorf("Expected ErrUnsupportedService, got %v", err)
+				} else if tt.service != "unknown" && !errors.Is(err, ErrInvalidQuotaMetric) {
+					t.Errorf("Expected ErrInvalidQuotaMetric, got %v", err)
+				}
 			}
 		})
 	}
@@ -197,7 +141,7 @@ func TestValidateQuotaMetricConfig(t *testing.T) {
 			services: map[string]ServiceConfig{
 				"unknown": {},
 			},
-			wantError: false,
+			wantError: true,
 		},
 	}
 
@@ -207,6 +151,21 @@ func TestValidateQuotaMetricConfig(t *testing.T) {
 			err := ValidateQuotaMetricConfig(cfg, nil)
 			if (err != nil) != tt.wantError {
 				t.Errorf("expected error=%v, got error=%v", tt.wantError, err != nil)
+			}
+			
+			// Check for correct error type
+			if err != nil {
+				serviceName := ""
+				for s := range tt.services {
+					serviceName = s
+					break
+				}
+				
+				if serviceName == "unknown" && !errors.Is(err, ErrUnsupportedService) {
+					t.Errorf("Expected ErrUnsupportedService, got %v", err)
+				} else if serviceName != "unknown" && !errors.Is(err, ErrInvalidQuotaMetric) {
+					t.Errorf("Expected ErrInvalidQuotaMetric, got %v", err)
+				}
 			}
 		})
 	}

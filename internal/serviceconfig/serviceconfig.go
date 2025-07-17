@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/outofoffice3/aws-samples/geras/internal/constants"
 	applogger "github.com/outofoffice3/aws-samples/geras/internal/logger"
 )
 
@@ -48,128 +49,38 @@ func LoadConfigFromFile(filePath string, logger applogger.Logger) (*TopLevelServ
 	return &cfg, nil
 }
 
-// Validation error variables for different AWS services.
+// Error variables for validation
 var (
-	// ErrInvalidEC2Metric indicates an unsupported EC2 quota metric.
-	ErrInvalidEC2Metric = fmt.Errorf("invalid EC2 quota metric")
-	// ErrInvalidEKSMetric indicates an unsupported EKS quota metric.
-	ErrInvalidEKSMetric = fmt.Errorf("invalid EKS quota metric")
-	// ErrInvalidIAMMetric indicates an unsupported IAM quota metric.
-	ErrInvalidIAMMetric = fmt.Errorf("invalid IAM quota metric")
-	// ErrInvalidEBSMetric indicates an unsupported EBS quota metric.
-	ErrInvalidEBSMetric = fmt.Errorf("invalid EBS quota metric")
-	// ErrInvalidVPCMetric indicates an unsupported VPC quota metric.
-	ErrInvalidVPCMetric = fmt.Errorf("invalid VPC quota metric")
+	// ErrInvalidQuotaMetric indicates an unsupported quota metric for a service
+	ErrInvalidQuotaMetric = fmt.Errorf("invalid quota metric")
+	
+	// ErrUnsupportedService indicates an unknown or unsupported service
+	ErrUnsupportedService = fmt.Errorf("unsupported service")
 )
 
-// ValidateEC2QuotaMetrics validates that all EC2 quota metrics are supported.
-// Currently supports: networkInterfaces.
-func ValidateEC2QuotaMetrics(service ServiceConfig) error {
-	validMetrics := map[string]struct{}{
-		"networkInterfaces": {},
-	}
-	for _, metric := range service.QuotaMetrics {
-		if _, ok := validMetrics[metric.Name]; !ok {
-			return fmt.Errorf("%w: %s", ErrInvalidEC2Metric, metric.Name)
-		}
-	}
-	return nil
-}
-
-// ValidateEKSQuotaMetrics validates that all EKS quota metrics are supported.
-// Currently supports: listClusters.
-func ValidateEKSQuotaMetrics(service ServiceConfig) error {
-	validAPIs := map[string]struct{}{
-		"listClusters": {},
-	}
-	for _, api := range service.QuotaMetrics {
-		if _, ok := validAPIs[api.Name]; !ok {
-			return fmt.Errorf("%w: %s", ErrInvalidEKSMetric, api.Name)
-		}
-	}
-	return nil
-}
-
-// ValidateIAMQuotaMetrics validates that all IAM quota metrics are supported.
-// Currently supports: iamRoles, oidcProviders.
-func ValidateIAMQuotaMetrics(service ServiceConfig) error {
-	validMetrics := map[string]struct{}{
-		"iamRoles":      {},
-		"oidcProviders": {},
-	}
-	for _, metric := range service.QuotaMetrics {
-		if _, ok := validMetrics[metric.Name]; !ok {
-			return fmt.Errorf("%w: %s", ErrInvalidIAMMetric, metric.Name)
-		}
-	}
-	return nil
-}
-
-// ValidateEBSQuotaMetrics validates that all EBS quota metrics are supported.
-// Currently supports: gp3storage.
-func ValidateEBSQuotaMetrics(service ServiceConfig) error {
-	validMetrics := map[string]struct{}{
-		"gp3storage": {},
-	}
-	for _, metric := range service.QuotaMetrics {
-		if _, ok := validMetrics[metric.Name]; !ok {
-			return fmt.Errorf("%w: %s", ErrInvalidEBSMetric, metric.Name)
-		}
-	}
-	return nil
-}
-
-// ValidateVPCQuotaMetrics validates that all VPC quota metrics are supported.
-// Currently supports: nau (Network Address Usage).
-func ValidateVPCQuotaMetrics(service ServiceConfig) error {
-	validMetrics := map[string]struct{}{
-		"nau": {},
-	}
-	for _, metric := range service.QuotaMetrics {
-		if _, ok := validMetrics[metric.Name]; !ok {
-			return fmt.Errorf("%w: %s", ErrInvalidVPCMetric, metric.Name)
-		}
-	}
-	return nil
-}
-
 // ValidateQuotaMetricConfig validates the quota metric configuration for all services.
-// Returns an error if any service has invalid quota metric configurations.
+// Returns an error if any service has invalid quota metric configurations or if an unknown service is configured.
 func ValidateQuotaMetricConfig(cfg TopLevelServiceConfig, logger applogger.Logger) error {
 	if logger == nil {
 		logger = applogger.Get()
 	}
+
 	for serviceName, serviceCfg := range cfg.Services {
-		switch serviceName {
-		case "ec2":
-			if err := ValidateEC2QuotaMetrics(serviceCfg); err != nil {
-				logger.Error("invalid ec2 quota config : %v", err)
-				return err
+		// Check if service is supported
+		if _, serviceExists := constants.ServiceJobMap[serviceName]; !serviceExists {
+			logger.Error("unsupported service configured: %s", serviceName)
+			return fmt.Errorf("%w: %s", ErrUnsupportedService, serviceName)
+		}
+
+		// Check if jobs are supported for this service
+		for _, qm := range serviceCfg.QuotaMetrics {
+			if !constants.IsValidServiceJob(serviceName, qm.Name) {
+				logger.Error("invalid quota metric %q for service %q", qm.Name, serviceName)
+				return fmt.Errorf("%w: %s for service %s", ErrInvalidQuotaMetric, qm.Name, serviceName)
 			}
-		case "eks":
-			if err := ValidateEKSQuotaMetrics(serviceCfg); err != nil {
-				logger.Error("invalid eks quota config : %v", err)
-				return err
-			}
-		case "iam":
-			if err := ValidateIAMQuotaMetrics(serviceCfg); err != nil {
-				logger.Error("invalid iam quota config : %v", err)
-				return err
-			}
-		case "ebs":
-			if err := ValidateEBSQuotaMetrics(serviceCfg); err != nil {
-				logger.Error("invalid ebs quota config : %v", err)
-				return err
-			}
-		case "vpc":
-			if err := ValidateVPCQuotaMetrics(serviceCfg); err != nil {
-				logger.Error("invalid vpc quota config : %v", err)
-				return err
-			}
-		default:
-			logger.Warn("no quota config for service %s", serviceName)
 		}
 	}
+
 	logger.Debug("quota metric config validated")
 	return nil
 }

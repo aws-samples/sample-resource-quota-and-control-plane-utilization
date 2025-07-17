@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/outofoffice3/aws-samples/geras/internal/constants"
+
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/outofoffice3/aws-samples/geras/internal/awsclients/cwlclient"
@@ -462,9 +464,9 @@ func buildJobManager(input BuildJobManagerInput) job.JobManager {
 	for _, region := range input.Regions {
 		for serviceName, svcCfg := range input.Services {
 			switch serviceName {
-			case "ec2":
+			case constants.ServiceEC2:
 				for _, qm := range svcCfg.QuotaMetrics {
-					if qm.Name == "networkInterfaces" {
+					if strings.EqualFold(qm.Name, constants.JobNetworkInterfaces) {
 						log.Info("creating EC2 job for region: %s", region)
 						ec2Client, err := clientFactory.CreateEC2(region)
 						if err != nil {
@@ -502,9 +504,9 @@ func buildJobManager(input BuildJobManagerInput) job.JobManager {
 					}
 				}
 
-			case "eks":
+			case constants.ServiceEKS:
 				for _, qm := range svcCfg.QuotaMetrics {
-					if qm.Name == "listClusters" {
+					if strings.EqualFold(qm.Name, constants.JobListClusters) {
 						log.Info("creating EKS job for region: %s", region)
 						eksClient, err := clientFactory.CreateEKS(region)
 						if err != nil {
@@ -542,9 +544,9 @@ func buildJobManager(input BuildJobManagerInput) job.JobManager {
 					}
 				}
 
-			case "iam":
+			case constants.ServiceIAM:
 				for _, qm := range svcCfg.QuotaMetrics {
-					if qm.Name == "oidcProviders" {
+					if strings.EqualFold(qm.Name, constants.JobOIDCProviders) {
 						log.Info("creating IAM OIDC job for region: %s", region)
 						iamClient, err := clientFactory.CreateIAM(region)
 						if err != nil {
@@ -580,7 +582,7 @@ func buildJobManager(input BuildJobManagerInput) job.JobManager {
 							log.Info("added oidc providers job for region: %s to job manager", region)
 						}
 					}
-					if qm.Name == "iamRoles" {
+					if strings.EqualFold(qm.Name, constants.JobIAMRoles) {
 						// Create IAM roles job for each region, but always use us-east-1 for Service Quotas
 						log.Info("creating IAM Roles job for region: %s", region)
 						iamClient, err := clientFactory.CreateIAM(region)
@@ -619,9 +621,9 @@ func buildJobManager(input BuildJobManagerInput) job.JobManager {
 					}
 				}
 
-			case "ebs":
+			case constants.ServiceEBS:
 				for _, qm := range svcCfg.QuotaMetrics {
-					if qm.Name == "gp3Storage" {
+					if strings.EqualFold(qm.Name, constants.JobGP3Storage) {
 						log.Info("creating GP3 storage job for region: %s", region)
 						ebsClient, err := clientFactory.CreateEBS(region)
 						if err != nil {
@@ -659,9 +661,9 @@ func buildJobManager(input BuildJobManagerInput) job.JobManager {
 					}
 				}
 
-			case "vpc":
+			case constants.ServiceVPC:
 				for _, qm := range svcCfg.QuotaMetrics {
-					if qm.Name == "nau" {
+					if strings.EqualFold(qm.Name, constants.JobNAU) {
 						log.Info("creating vpc nau job for region: %s", region)
 						ec2Client, err := clientFactory.CreateEC2(region)
 						if err != nil {

@@ -10,7 +10,7 @@
     "ebs" : { 
       "quotaMetrics" : [
         {
-          "name": "gp3storage"
+          "name": "gp3Storage"
         }
       ]
     },

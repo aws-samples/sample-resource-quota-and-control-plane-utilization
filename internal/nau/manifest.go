@@ -189,7 +189,8 @@ func (m *manifestImpl) Finalize() error {
 			Key:    &m.key,
 			Body:   bytes.NewReader(buf.Bytes()),
 		}
-		if _, err := m.client.PutObject(m.ctx, input); err != nil {
+		// Use parentCtx instead of m.ctx for S3 upload to prevent context cancellation issues
+		if _, err := m.client.PutObject(m.parentCtx, input); err != nil {
 			m.handleErr(err)
 			finalizeErr = err
 			return
