@@ -18,21 +18,21 @@ type JobName string
 const (
 	// EC2 network interfaces utilization metric
 	JobNetworkInterfaceUtilization JobName = "NetworkInterfaceUtilization"
-	
+
 	// EBS GP3 storage utilization metric
 	JobGP3StorageUtilization JobName = "GP3StorageUtilization"
-	
+
 	// IAM roles utilization metric
 	JobIAMRoleUtilization JobName = "IAMRoleUtilization"
-	
+
 	// IAM OIDC providers utilization metric
 	JobOIDCProviderUtilization JobName = "OIDCProviderUtilization"
-	
+
 	// EKS clusters utilization metric
 	JobEKSClusterUtilization JobName = "EKSClusterUtilization"
-	
+
 	// VPC Network Address Units utilization metric
-	JobNetworkAddressUnitsUtilization JobName = "NetworkAddressUnitsUtilization"
+	JobNetworkAddressUnitsUtilization JobName = "NetworkAddressUsageUtilization"
 )
 
 // String implements the fmt.Stringer interface for JobName

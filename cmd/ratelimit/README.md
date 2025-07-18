@@ -2,26 +2,75 @@
 # Rate Limit Monitoring Solution
 
 1. [Overview](#overview)
-2. [Deployment Guide](#deployment-guide)
+2. [Prerequisites](#prerequisites)
+3. [Metrics Overview](#metrics-overview)
+4. [Deployment Guide](#deployment-guide)
     - [Environment Variables](#environment-variables)
-    - [Deploying w/ AWS SAM / Cloudformation](#deploying-with-aws-sam--cloudformation)
-    - [Deploying w/ Terraform](#deploying-with-terraform)
-3. [Tips: Automating Deployment](#tip-automating-builds--deployment)
+    - [AWS SAM / Cloudformation](#deploying-with-aws-sam--cloudformation)
+    - [Terraform](#deploying-with-terraform)
+5. [Tips: Automating Deployment](#tip-automating-builds--deployment)
+6.  [Testing & Code Coverage](#testing--code-coverage)
+7. [Viewing the Metrics](#viewing-the-metrics)
 
 ## Overview
 
-The Rate Limit Monitoring solution:
+The Rate Limit Monitoring Solution tracks AWS API call rates and publishes RequestPerSecond metrics to CloudWatch in ~60-second intervals to help prevent throttling events.
+
+![Architecture Diagram](../../media/monitoring-solution-Page-8.drawio.png)
+
+The solution:
 - Captures control-plane API calls from CloudTrail via EventBridge
 - Routes them through event-specific SQS FIFO queues
 - Lambda receives the event and generates an EMF for each event
 - EventBridge sends a flush event every 60 seconds that tells Lambda to publish all EMFs in the buffer
 - The Lambda extension listens for SHUTDOWN lifecycle events and flushes any remaining EMFs in the buffer prior to Lambda container destruction
 
-![Architecture Diagram](../../media/monitoring-solution-Page-8.drawio.png)
+## Prerequisites
 
-## Deployment Guide
+- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)  
+- [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) (latest)  
+- [Go v1.22.1](https://go.dev/doc/install) or higher (for local development)
+
+**Tools**
+
+| Tool         | Version      | Install                                                                                          |
+|--------------|--------------|--------------------------------------------------------------------------------------------------|
+| Go           | ≥1.23.0      | https://golang.org/dl/                                                                           |
+| Terraform    | ≥1.0.0       | https://learn.hashicorp.com/tutorials/terraform/install-cli                                      |
+| AWS SAM CLI  | ≥1.142.1     | https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html |
+| AWS CLI      | Latest       | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html                    |
 
 ---
+
+## Metrics Overview 
+
+The Rate Limit Solution:
+
+- Captures API call events from CloudTrail
+- Aggregates them over ~60-second intervals
+- Produces RequestPerSecond metrics at both API and invoker levels
+- Sends metrics to CloudWatch Logs via EMF (Embedded Metric Format)
+
+### Available Metrics (out of the box)
+
+| Service | Metric Name                  | Description                                        | Recommended Alarm Threshold |
+|---------|------------------------------|----------------------------------------------------|------------------------|
+| STS     | AssumeRoleRequestPerSecond   | API calls per second for AssumeRole                | 100 RPS               |
+| STS     | AssumeRoleWithWebIdentityRequestPerSecond | API calls per second for AssumeRoleWithWebIdentity | 100 RPS               |
+
+When `PROPAGATE_INVOKER=true`, additional per-invoker metrics are generated with the invoker ARN as a dimension.
+
+If you would like to generate `RequestPerSecond` metrics for additional events, you just need to create the following resource in either terraform or aws sam / cloudformation: 
+
+- new event bridge rule filtering for the event & region you want to generate `RequestPerSecond` metrics for
+- new SQS FIFO queue to receive the events
+- same lambda + extension 
+
+The benefit of this design is that each event has its own set of infrastructure so additional metric support can be easily added all via infrastructure as code.  
+
+---
+
+## Deployment Guide
 
 #### ⚠️ Disclaimer ⚠️
 This repository is provided as a functional example to demonstrate how you might capture control-plane events, buffer them through SQS, and emit EMF metrics via Lambda. It is not intended to represent a production-ready "drop in" solution. Before using in any live environment, you should:
@@ -35,31 +84,6 @@ This repository is provided as a functional example to demonstrate how you might
 Use this sample as a starting point, not a drop-in solution. Customize this solution based on your organization’s security, reliability, and operational requirements.
 
 ---
-
-This project can be deployed via [CloudFormation / AWS SAM](#deploying-with-cloudformation--aws-sam) or [Terraform](#deploying-with-terraform).  
-
-When deploying with AWS SAM:
-- build / package emf extension
-- send zip file containing artifact to s3
-- deploy sam template
-
-When deploying with Terraform:
-- build / package emf extension 
-- send zip file containing artifact to s3
-- build / package lambda function 
-- create / apply terraform plan
-
-### Prerequisites
-
-**Tools**
-
-| Tool         | Version      | Install                                                                                          |
-|--------------|--------------|--------------------------------------------------------------------------------------------------|
-| Go           | ≥1.23.0      | https://golang.org/dl/                                                                           |
-| Terraform    | ≥1.0.0       | https://learn.hashicorp.com/tutorials/terraform/install-cli                                      |
-| AWS SAM CLI  | ≥1.142.1     | https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html |
-| AWS CLI      | Latest       | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html                    |
-
 
 ### Environment Variables
 
@@ -217,9 +241,9 @@ We provide a file, [Makefile.extension](../../Makefile.extension), that simplifi
 
 3. **Build the RateLimit Lambda Function**
 
-We provide a dedicated Makefile (`Makefile.ratelimit`) to compile & package the RateLimit function.  Terraform is configured use this directory to pull the artifact and deploy to AWS:
+We provide a dedicated Makefile (`Makefile.ratelimit`) to compile & package the RateLimit function.  Terraform is configured to use this directory to pull the artifact and deploy to AWS:
 
-> NOTE: If you wish to push the artifact to S3 or another location instead, please ensure you edit the infra/terraform/main.tf file accordinly to reflect these changes
+> NOTE: If you wish to push the artifact to S3 or another location instead, please ensure you edit the infra/terraform/main.tf file accordingly to reflect these changes
 
 
 ```bash
@@ -272,3 +296,56 @@ You can integrate these `make` and deployment steps into a CI/CD pipeline (GitHu
 Simply invoke your `make` targets and SAM/Terraform commands in your pipeline’s build stage prior to the deploy stage.
 
 ---
+
+## Testing & Code Coverage
+
+We use `Makefile.tests` to streamline unit testing and coverage reporting.
+
+### Available Targets
+Run all commands with the `-f Makefile.tests` flag:
+
+- **`make -f Makefile.tests test-coverage`**  
+  Run tests in `internal/...` and generate a coverage profile at `coverage/coverage.out`.  
+- **`make -f Makefile.tests coverage-html`**  
+  Convert the profile into an HTML report at `coverage/coverage.html`.  
+- **`make -f Makefile.tests coverage-open`**  
+  Open the HTML report in your default browser (`open` on macOS, `xdg-open` on Linux).  
+- **`make -f Makefile.tests coverage-all`**  
+  Run tests, generate HTML report, and open it in one step.  
+- **`make -f Makefile.tests coverage-clean`**  
+  Remove the `coverage/` directory and its contents.  
+
+### Best Practices
+- **Local checks:** Run `make -f Makefile.tests test-coverage` before opening PRs to ensure no regressions.  
+- **CI integration:** Add `make -f Makefile.tests coverage-html` to your pipeline to publish coverage artifacts.  
+- **Coverage goals:** Strive for high coverage in `internal/...` packages; add tests for new code paths.  
+
+---
+
+## Viewing the Metrics
+
+To view the metrics published by the solution please follow the steps below. 
+
+1.  **Navigate to Cloudwatch**
+
+From the homepage of the your AWS console click CloudWatch. 
+
+![hompeage](../../media/awsconsolehome.png)
+
+2.  **Navigate to Metric Tab**
+
+Next, click the `All Metrics` tabs on the left side of the screen.  You should know see namespaces.  On the top should be custom namespaces where you'll see `Rate Limit` (if you kept our default namespace name.  If not, navigate to the custom namespace that you created.)
+
+![metrics](../../media/metricspage.png)
+
+3.  **Viewing the Metrics**
+
+![namespace](../../media/ratelimitnamespace.png)
+
+You should now see namespaces: 
+- `eventName, invoker`
+   - contain invoker level metrics
+- `eventName`
+   - contain overall api level metrics
+- `Metrics with no dimensions`
+   - ErrorCount auto created metric whenever the solution has an error in processing

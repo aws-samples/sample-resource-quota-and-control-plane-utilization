@@ -41,8 +41,8 @@ type OIDCProviderJobConfig struct {
 }
 
 const (
-	serviceQuotaCode       = "L-858F3967"
-	serviceCode            = "iam"
+	serviceQuotaCode = "L-858F3967"
+	serviceCode      = "iam"
 )
 
 // NewOIDCProviderJob will create a new OIDCProviderJob

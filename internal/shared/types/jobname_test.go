@@ -16,7 +16,7 @@ func TestJobName_String(t *testing.T) {
 		{JobIAMRoleUtilization, "IAMRoleUtilization"},
 		{JobOIDCProviderUtilization, "OIDCProviderUtilization"},
 		{JobEKSClusterUtilization, "EKSClusterUtilization"},
-		{JobNetworkAddressUnitsUtilization, "NetworkAddressUnitsUtilization"},
+		{JobNetworkAddressUnitsUtilization, "NetworkAddressUsageUtilization"},
 	}
 
 	for _, tt := range tests {
@@ -55,24 +55,24 @@ func TestJobName_Validate(t *testing.T) {
 func TestJobName_JSONSerialization(t *testing.T) {
 	// Test marshaling and unmarshaling JobName
 	original := JobNetworkInterfaceUtilization
-	
+
 	// Marshal
 	data, err := json.Marshal(original)
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
-	
+
 	// Verify it's marshaled as a string
 	if string(data) != `"NetworkInterfaceUtilization"` {
 		t.Errorf("Marshaled data = %s, want \"NetworkInterfaceUtilization\"", data)
 	}
-	
+
 	// Unmarshal
 	var unmarshaled JobName
 	if err := json.Unmarshal(data, &unmarshaled); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
-	
+
 	// Verify
 	if unmarshaled != original {
 		t.Errorf("Unmarshaled = %q, want %q", unmarshaled, original)
@@ -96,7 +96,7 @@ func TestJobName_Constants(t *testing.T) {
 	if JobEKSClusterUtilization != "EKSClusterUtilization" {
 		t.Errorf("JobEKSClusterUtilization = %q, want \"EKSClusterUtilization\"", JobEKSClusterUtilization)
 	}
-	if JobNetworkAddressUnitsUtilization != "NetworkAddressUnitsUtilization" {
-		t.Errorf("JobNetworkAddressUnitsUtilization = %q, want \"NetworkAddressUnitsUtilization\"", JobNetworkAddressUnitsUtilization)
+	if JobNetworkAddressUnitsUtilization != "NetworkAddressUsageUtilization" {
+		t.Errorf("JobNetworkAddressUsageUtilization = %q, want \"NetworkAddressUsageUtilization\"", JobNetworkAddressUnitsUtilization)
 	}
 }

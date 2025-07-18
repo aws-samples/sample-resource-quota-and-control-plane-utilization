@@ -1,68 +1,24 @@
 # Resource Quota Monitoring Solution
 
 1. [Overview](#overview)
-2. [Deployment Guide](#deployment-guide)
-    - [Environment Variables](#environment-variables)
-    - [Deploying w/ AWS SAM / Cloudformation](#deploying-with-aws-sam--cloudformation)
-    - [Deploying w/ Terraform](#deploying-with-terraform)
-3. [Tips: Automating Deployment](#tip-automating-builds--deployment)
+2. [Prerequisites](#prerequisites)
+3. [Metrics Overview](#metrics-overview)
+4. [Configuration File](#configuration-file)
+5. [Deployment Guide](#deployment-guide)
+    - [AWS SAM / Cloudformation](#deploying-with-aws-sam--cloudformation)
+    - [Terraform](#deploying-with-terraform)
+6. [Tips: Automating Deployment](#tip-automating-builds--deployment)
+7. [Testing & Code Coverage](#testing--code-coverage)
+8. [Viewing the Metrics](#viewing-the-metrics)
 
 
 ## Overview 
 
-The Resource Quota Solution does the following : 
-- captures total counts of various resources specific via your config file
-- gets the total allocation from Service Quotas api 
-- produces utilization % and sends metric to cloudwatch logs via EMF (Embedded Metric Format)
+The Resource Quota Monitoring Solution tracks AWS resource utilization against service quotas, publishing metrics to CloudWatch to help prevent resource exhaustion and quota limits.
 
 ![Architecture Diagram](../../media/monitoring-solution-Page-6.drawio%20(1).png)
 
-## Valid Metrics per service 
-
-We will add mmore metrics based on customer feedback but below is what we have converage for today. 
-
-``` bash 
-- ec2 
-  - networkInterfaces
-- eks 
-  - listClusters
-- vpc 
-  - nau
-- iam 
-  - iamRoles
-  - oidcProviders
-- ebs
-  - gp3Storage
-```
-#### ⚠️ Attention⚠️
-For the `iamRoles` and `gp3Storage` metric, we use the Support API to perform `RefreshTrustedAdvisorCheck` against the Trusted Advisor service.  You need at least business support for this metric to work, if not, the solution will throw a 404 exception but it will continue to calculate other metrics.
-
-## Deployment Guide
-
----
-#### ⚠️ Disclaimer ⚠️
-This repository is provided as a functional example to demonstrate how you might capture control-plane events, buffer them through SQS, and emit EMF metrics via Lambda. It is not intended to represent a production-ready "drop in" solution. Before using in any live environment, you should:
-
-- Review and adjust IAM permissions to follow the principle of least privilege
-- Review encryption at rest and in transit for all resources (SQS, Lambda, logs, etc.)
-- Configure VPC, subnet, and security group settings according to your network requirements
-- Implement proper monitoring, alerting, and log retention lifecycles
-- Be aware of any costs associated with deploying in your account(s)
-
-Use this sample as a starting point, not a drop-in solution. Customize this solution based on your organization’s security, reliability, and operational requirements.
-
----
-
-This project can be deployed via [CloudFormation / AWS SAM](#deploying-with-aws-sam--cloudformation) or [Terraform](#deploying-with-terraform).  
-
-When deploying with AWS SAM:
-- deploy sam template
-
-When deploying with Terraform:
-- build / package lambda function 
-- create / apply terraform plan
-
-### Prerequisites
+## Prerequisites
 
 - [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)  
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) (latest)  
@@ -77,6 +33,91 @@ When deploying with Terraform:
 | AWS SAM CLI  | ≥1.142.1     | https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html |
 | AWS CLI      | Latest       | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html                    |
 
+
+## Metrics Overview
+
+The Resource Quota Solution:
+
+Captures total counts of various resources specified via your config file
+
+Gets the total allocation from Service Quotas API
+
+Produces utilization percentages and sends metrics to CloudWatch Logs via EMF (Embedded Metric Format)
+
+### Available Metrics
+
+| Service | Metric Name                  | Description                                        | Recommended Alarm Threshold |
+|---------|------------------------------|----------------------------------------------------|------------------------|
+| EC2     | NetworkInterfacesUtilization | Percentage of ENIs used against quota              | 80%                   |
+| EKS     | EKSClusterUtilization        | Percentage of EKS clusters used against quota      | 80%                   |
+| VPC     | NetworkAddressUsageUtilization | Percentage of NAUs used per VPC                 | 70%                   |
+| IAM     | IAMRolesUtilization          | Percentage of IAM roles used against quota         | 80%                   |
+| IAM     | OIDCProviderUtilization      | Percentage of OIDC providers used against quota    | 80%                   |
+| EBS     | GP3StorageUtilization        | Percentage of GP3 storage used against quota       | 80%                   |
+
+## Configuration File
+
+The solution uses a `config.json` file deployed as a Lambda layer to control which metrics are collected.
+
+**Example Configuration**
+``` json
+{
+  "services": {
+    "ec2": {
+      "quotaMetrics": [
+        {
+          "name": "networkInterfaces"
+        }
+      ]
+    },
+    "ebs" : { 
+      "quotaMetrics" : [
+        {
+          "name": "gp3Storage"
+        }
+      ]
+    },
+    "iam": {
+      "quotaMetrics": [
+        {
+          "name": "oidcProviders"          
+        },
+        {
+          "name": "iamRoles"
+        }
+      ]
+    },
+    "vpc" :{ 
+      "quotaMetrics" : [
+        { 
+          "name": "nau"
+        }
+      ]
+    },
+    "eks" : { 
+      "quotaMetrics" : [
+        {
+          "name": "listClusters"
+        }
+      ]
+    }
+  }
+}
+```
+
+## Deployment Guide
+
+#### ⚠️ Disclaimer ⚠️
+This repository is provided as a functional example to demonstrate how you might calculate resource quota utilization, and emit EMF metrics via Lambda. It is not intended to represent a production-ready "drop in" solution. Before using in any live environment, you should:
+
+- Review and adjust IAM permissions to follow the principle of least privilege
+- Review encryption at rest and in transit for all resources (SQS, Lambda, logs, etc.)
+- Configure VPC, subnet, and security group settings according to your network requirements
+- Implement proper monitoring, alerting, and log retention lifecycles
+- Be aware of any costs associated with deploying in your account(s)
+
+Use this sample as a starting point, not a drop-in solution. Customize this solution based on your organization’s security, reliability, and operational requirements.
+
 ### Environment Variables
 
 | Name             | Description                                                                   | Default |
@@ -87,6 +128,8 @@ When deploying with Terraform:
 | LAMBDA_LAYER_PATH | Path to the location of the config.json file in the Lambda layer. If you made any changes to the Lambda layer, you need to update this variable accordingly. | /opt/config/config.json |
 
 
+---
+
 ### Deploying with AWS SAM / Cloudformation
 
 Prior to deploying, please review the resource below to see what AWS SAM / Cloudformation will deploy. 
@@ -96,13 +139,13 @@ Please make changes to the template based on your specific environment / securit
 
 #### Resources
 
-| Logical ID                  | Type                            | Description                                                    | Key Properties                                                                                                                                                       |
-|-----------------------------|---------------------------------|----------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **LambdaExecutionRole**     | `AWS::IAM::Role`                | IAM role assumed by the ResourceQuota Lambda                   | • Trust: `lambda.amazonaws.com`  <br>• ManagedPolicyArns: `AWSLambdaBasicExecutionRole`  <br>• Inline policy covering EC2, EKS, IAM, Support, EFS, CloudWatchLogs, S3 |
-| **ConfigFileLambdaLayer**   | `AWS::Serverless::LayerVersion` | Layer packaging your `config/` directory                       | • ContentUri: `../../../lambda-layer/`  <br>• CompatibleRuntimes: `provided.al2023`  <br>• Architectures: `arm64`                                                     |
-| **ResourceQuotaFunction**   | `AWS::Serverless::Function`     | Main Go Lambda that computes & publishes quota EMF metrics     | • CodeUri: `../../../cmd/resourcequota`  <br>• Handler: `bootstrap`  <br>• Role: `LambdaExecutionRole` ARN  <br>• Layers: `[ConfigFileLambdaLayer]`  <br>• Schedule: rate(5 min) |
-| **ResourceQuotaErrorFilter**| `AWS::Logs::MetricFilter`       | Scans the Lambda’s application-log group for `"ERROR"` events  | • FilterPattern: `"ERROR"`  <br>• LogGroupName: `/aws/lambda/${ResourceQuotaFunction}`  <br>• MetricName: `Error Count`  <br>• MetricNamespace: `${MetricNamespace}`     |
-| **ResourceQuotaErrorAlarm** | `AWS::CloudWatch::Alarm`        | Fires when any ERROR-log appears in your Lambda’s logs         | • Namespace: `${MetricNamespace}`  <br>• MetricName: `Error Count`  <br>• Dimension: LogGroupName=`/aws/lambda/${ResourceQuotaFunction}`  <br>• Threshold: `1`          |
+| Logical ID                   | Type                            | Description                                                           | Key Properties                                                                                                                                                                                                                   |
+|------------------------------|---------------------------------|-----------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **LambdaExecutionRole**      | `AWS::IAM::Role`                | IAM role assumed by the ResourceQuota Lambda, with permissions to describe quotas and write to CloudWatch & S3. | - **AssumeRolePolicyDocument:** Allows `lambda.amazonaws.com` to assume<br>- **ManagedPolicyArns:** `AWSLambdaBasicExecutionRole`<br>- **Inline Policy (ResourceQuotaPolicy):**<br>  • **EC2:** `ec2:DescribeNetworkInterfaces`, `ec2:DescribeVolumes`, `ec2:DescribeVpcs`<br>  • **EKS:** `eks:ListClusters`<br>  • **IAM:** `iam:ListOpenIDConnectProviders`, `iam:ListRoles`<br>  • **CloudWatch Logs:** `logs:DescribeLogGroups`, `logs:CreateLogGroup`, `logs:DescribeLogStreams`, `logs:CreateLogStream`, `logs:PutLogEvents`<br>  • **Service Quotas:** `servicequotas:GetServiceQuota`<br>  • **S3:** `s3:PutObject`, `s3:PutObjectAcl` on `arn:aws:s3:::${S3BucketName}/*`; `s3:ListBucket` on `arn:aws:s3:::${S3BucketName}` |
+| **ConfigFileLambdaLayer**    | `AWS::Serverless::LayerVersion` | Lambda layer containing the JSON config used by the resource-quota monitor. | - **LayerName:** `resource-quota-config`<br>- **ContentUri:** `../../../lambda-layer/`<br>- **CompatibleArchitectures:** `arm64`<br>- **CompatibleRuntimes:** `provided.al2023`                                          |
+| **ResourceQuotaFunction**    | `AWS::Serverless::Function`     | Go-based Lambda that runs every 5 minutes to poll quotas and emit EMF metrics. | - **FunctionName:** `geras-resource-quota`<br>- **Runtime:** `provided.al2023`<br>- **CodeUri/Handler:** Go binary (`bootstrap`)<br>- **Role:** `!GetAtt LambdaExecutionRole.Arn`<br>- **Layers:** `ConfigFileLambdaLayer`<br>- **Environment Variables:** `LAMBDA_LAYER_PATH`, `CLOUDWATCH_LOG_GROUP`, `METRIC_NAMESPACE`, `LOG_LEVEL`, `S3_BUCKET`, `HOME_REGION`, `REGIONS`<br>- **Events:** `Schedule` (`rate(5 minutes)`), enabled |
+| **ResourceQuotaErrorFilter** | `AWS::Logs::MetricFilter`       | Captures any `"ERROR"` log lines from the Lambda and turns them into CloudWatch metrics. | - **FilterPattern:** `"ERROR"`<br>- **LogGroupName:** `/aws/lambda/${ResourceQuotaFunction}`<br>- **MetricTransformations:** `MetricName: "Error Count"`, `MetricNamespace: !Ref MetricNamespace`, `MetricValue: "1"`    |
+| **ResourceQuotaErrorAlarm**  | `AWS::CloudWatch::Alarm`        | Alarm triggered when the MetricFilter records ≥ 1 error in a 1-minute period. | - **AlarmName:** `ResourceQuota-Error-Alarm`<br>- **AlarmDescription:** “Alarm when the ResourceQuotaLambda emits any error logs”<br>- **Namespace/MetricName:** `!Ref MetricNamespace` / `"Error Count"`<br>- **Dimensions:** `LogGroupName = /aws/lambda/${ResourceQuotaFunction}`<br>- **Statistic:** `Sum`<br>- **Period:** `60`<br>- **EvaluationPeriods:** `1`<br>- **Threshold:** `1`<br>- **ComparisonOperator:** `GreaterThanOrEqualToThreshold`<br>- **TreatMissingData:** `notBreaching` |
 
 ---
 
@@ -156,19 +199,23 @@ Prior to deploying, please review the resource below to see what Terraform will 
 Please make changes to the template based on your specific environment and security requirements. This is a functional sample but is not verified to be production-ready by default.
 
 #### Resources 
-| Resource                                           | Type                              | Description                                                              | Key Properties                                                                                                                              |
-|----------------------------------------------------|-----------------------------------|--------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| `aws_iam_role.lambda_exec`                         | `aws_iam_role`                    | IAM role assumed by the ResourceQuota Lambda                             | `assume_role_policy` allowing `lambda.amazonaws.com`                                                                                        |
-| `aws_iam_role_policy_attachment.attach_basic`      | `aws_iam_role_policy_attachment`  | Attach AWSLambdaBasicExecutionRole                                       | `role = aws_iam_role.lambda_exec`, `policy_arn = AWSLambdaBasicExecutionRole`                                                               |
-| `aws_iam_role_policy.resource_quota`               | `aws_iam_role_policy`             | Inline policy granting permissions for EC2, EKS, IAM, Support, etc.      | JSON policy document with actions for `ec2:Describe*`, `eks:ListClusters`, `servicequotas:GetServiceQuota`, `s3:PutObject`, `s3:ListBucket` |
-| `data.archive_file.lambda_config_layer`            | `archive_file`                    | Zips up the local `lambda-layer` directory into a `.zip`                 | `source_dir = ../../../lambda-layer`, `output_path = lambda-layer.zip`                                                                       |
-| `aws_lambda_layer_version.config`                  | `aws_lambda_layer_version`        | Publishes the zipped config folder as a Lambda Layer                     | `filename = data.archive_file.lambda_config_layer.output_path`, `compatible_runtimes = ["provided.al2023"]`                                  |
-| `aws_lambda_function.resource_quota`               | `aws_lambda_function`             | The ResourceQuota Go Lambda                                              | `filename = dist/resourcequota/resourcequota.zip`, environment variables (including `REGIONS`), runtime, handler, layers                     |
-| `aws_cloudwatch_event_rule.every_5m`               | `aws_cloudwatch_event_rule`       | Schedules the Lambda to run every 5 minutes                              | `schedule_expression = "rate(5 minutes)"`, `name = "ResourceQuotaEveryFiveMinutes"`                                                         |
-| `aws_cloudwatch_event_target.every_5m_target`      | `aws_cloudwatch_event_target`     | Binds the 5-min rule to the Lambda function                              | `rule = aws_cloudwatch_event_rule.every_5m.name`, `arn = aws_lambda_function.resource_quota.arn`                                             |
-| `aws_lambda_permission.allow_event`                | `aws_lambda_permission`           | Grants EventBridge permission to invoke the Lambda                       | `function_name = aws_lambda_function.resource_quota.function_name`, `principal = "events.amazonaws.com"`                                     |
-| `aws_cloudwatch_log_metric_filter.resource_quota_error` | `aws_cloudwatch_log_metric_filter` | Metric filter for any `"ERROR"` logs in the Lambda’s native log group     | `log_group_name = "/aws/lambda/${aws_lambda_function.resource_quota.function_name}"`, `pattern = "\"ERROR\""`, transforms → ErrorCount       |
-| `aws_cloudwatch_metric_alarm.resource_quota_error_alarm` | `aws_cloudwatch_metric_alarm`     | Alarm when the ResourceQuota Lambda emits any ERROR logs                  | `namespace = var.metric_namespace`, `metric_name = "ErrorCount"`, `threshold = 1`, `statistic = "Sum"`, `dimensions = { LogGroupName = ... }` |
+
+| Logical ID                                   | Type                                     | Description                                                                     | Key Properties                                                                                                                                                                                                                                              |
+|----------------------------------------------|------------------------------------------|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `data.aws_iam_policy.basic_exec`             | `data "aws_iam_policy"`                  | Lookup AWS-managed policy for basic Lambda execution.                            | • **arn**: `"arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"`                                                                                                                                        |
+| `aws_iam_role.lambda_exec`                   | `resource "aws_iam_role"`                | IAM role assumed by the Lambda function.                                         | • **name**: `"resource_quota_lambda_exec"`<br>• **assume_role_policy**: JSON securing `sts:AssumeRole` for `lambda.amazonaws.com`                                                                                                                    |
+| `aws_iam_role_policy_attachment.attach_basic`| `resource "aws_iam_role_policy_attachment"` | Attaches the basic execution managed policy to the Lambda role.                  | • **role**: `aws_iam_role.lambda_exec.name`<br>• **policy_arn**: `data.aws_iam_policy.basic_exec.arn`                                                                                                          |
+| `aws_iam_role_policy.resource_quota`         | `resource "aws_iam_role_policy"`         | Inline policy granting quota-monitoring and S3 permissions.                      | • **name**: `"ResourceQuotaPolicy"`<br>• **role**: `aws_iam_role.lambda_exec.id`<br>• **policy**: JSON with statements for EC2 Describe*, EKS ListClusters, IAM List*, CloudWatch Logs, ServiceQuotas:GetServiceQuota, S3 Put*/ListBucket |
+| `data.archive_file.lambda_config_layer`      | `data "archive_file"`                    | Creates a ZIP of the config directory for the Lambda layer.                      | • **type**: `"zip"`<br>• **source_dir**: `"${path.module}/../../../lambda-layer"`<br>• **output_path**: `"${path.module}/lambda-layer.zip"`                                                                                                   |
+| `aws_lambda_layer_version.config`            | `resource "aws_lambda_layer_version"`    | Lambda layer containing resource-quota configuration.                            | • **layer_name**: `"resource-quota-config"`<br>• **description**: `"Configuration for resource quota utilization"`<br>• **compatible_runtimes**: `["provided.al2023"]`<br>• **compatible_architectures**:`["arm64"]`<br>• **filename**: `data.archive_file.lambda_config_layer.output_path` |
+| `aws_lambda_function.resource_quota`         | `resource "aws_lambda_function"`         | Go-based Lambda that polls quotas every 5 minutes and emits EMF metrics.         | • **function_name**: `"geras-resource-quota"`<br>• **filename**: `local.resourcequota_zip`<br>• **role**: `aws_iam_role.lambda_exec.arn`<br>• **handler/runtime/architectures/timeout**: `"bootstrap"`, `"provided.al2"`, `["arm64"]`, `900s`<br>• **layers**: `aws_lambda_layer_version.config.arn`<br>• **environment**: vars for layer path, log group, namespace, log level, S3 bucket, home region, regions |
+| `aws_cloudwatch_event_rule.every_5m`         | `resource "aws_cloudwatch_event_rule"`   | EventBridge rule to trigger the Lambda every five minutes.                      | • **name**: `"ResourceQuotaEveryFiveMinutes"`<br>• **schedule_expression**: `"rate(5 minutes)"`                                                                                                                               |
+| `aws_cloudwatch_event_target.every_5m_target`| `resource "aws_cloudwatch_event_target"` | Associates the schedule rule with the Lambda function.                           | • **rule**: `aws_cloudwatch_event_rule.every_5m.name`<br>• **arn**: `aws_lambda_function.resource_quota.arn`                                                                                                                   |
+| `aws_lambda_permission.allow_event`          | `resource "aws_lambda_permission"`       | Grants EventBridge permission to invoke the Lambda.                              | • **statement_id**: `"AllowExecutionFromEvents"`<br>• **action**: `"lambda:InvokeFunction"`<br>• **function_name**: `aws_lambda_function.resource_quota.function_name`<br>• **principal**: `"events.amazonaws.com"`<br>• **source_arn**: `aws_cloudwatch_event_rule.every_5m.arn` |
+| `aws_cloudwatch_log_metric_filter.resource_quota_error` | `resource "aws_cloudwatch_log_metric_filter"` | Creates a CloudWatch metric from ERROR logs in the Lambda log group.            | • **name**: `"ResourceQuota-ErrorFilter"`<br>• **log_group_name**: `"/aws/lambda/${aws_lambda_function.resource_quota.function_name}"`<br>• **pattern**: `"\"ERROR\""`<br>• **metric_transformation**: `name="ErrorCount"`, `namespace=var.metric_namespace`, `value="1"` |
+| `aws_cloudwatch_metric_alarm.resource_quota_error_alarm`| `resource "aws_cloudwatch_metric_alarm"`| Alarm if the Lambda emits any ERROR logs within 1 minute.                       | • **alarm_name**: `"ResourceQuota-Error-Alarm"`<br>• **alarm_description**: `"Fires if the ResourceQuota Lambda emits any ERROR logs"`<br>• **namespace/metric_name**: `var.metric_namespace` / `"ErrorCount"`<br>• **statistic/period/evaluation_periods/threshold/comparison_operator/treat_missing_data**: `"Sum"`, `60`, `1`, `1`, `"GreaterThanOrEqualToThreshold"`, `"notBreaching"`<br>• **dimensions**: `LogGroupName="/aws/lambda/${aws_lambda_function.resource_quota.function_name}"` |
+| `output.resource_quota_function_arn`         | `output`                                 | Exposes the ARN of the ResourceQuota Lambda function.                            | • **description**: `"ARN of the ResourceQuota Lambda"`<br>• **value**: `aws_lambda_function.resource_quota.arn`                                                                                                                  |
+
  ---
 
 #### Variables 
@@ -193,7 +240,7 @@ Please make changes to the template based on your specific environment and secur
 
 2. **Build the Resource Quota Lambda Function**
 
-We provide a dedicated Makefile (`Makefile.resourcequota`) to compile & package the ResourceQuota function.  Terraform is configured use this directory to pull the artifact and deploy to AWS:
+We provide a dedicated Makefile (`Makefile.resourcequota`) to compile & package the ResourceQuota function.  Terraform is configured to use this directory to pull the artifact and deploy to AWS:
 
 > NOTE: If you wish to push the artifact to S3 or another location instead, please ensure you edit the infra/terraform/main.tf file accordinly to reflect these changes
 
@@ -246,3 +293,60 @@ You can integrate these `make` and deployment steps into a CI/CD pipeline (GitHu
 - **Decoupling** developers from local workstation dependencies  
 
 Simply invoke your `make` targets and SAM/Terraform commands in your pipeline’s build stage prior to the deploy stage.
+
+## Testing & Code Coverage
+
+We use `Makefile.tests` to streamline unit testing and coverage reporting.
+
+### Available Targets
+Run all commands with the `-f Makefile.tests` flag:
+
+- **`make -f Makefile.tests test-coverage`**  
+  Run tests in `internal/...` and generate a coverage profile at `coverage/coverage.out`.  
+- **`make -f Makefile.tests coverage-html`**  
+  Convert the profile into an HTML report at `coverage/coverage.html`.  
+- **`make -f Makefile.tests coverage-open`**  
+  Open the HTML report in your default browser (`open` on macOS, `xdg-open` on Linux).  
+- **`make -f Makefile.tests coverage-all`**  
+  Run tests, generate HTML report, and open it in one step.  
+- **`make -f Makefile.tests coverage-clean`**  
+  Remove the `coverage/` directory and its contents.  
+
+### Best Practices
+- **Local checks:** Run `make -f Makefile.tests test-coverage` before opening PRs to ensure no regressions.  
+- **CI integration:** Add `make -f Makefile.tests coverage-html` to your pipeline to publish coverage artifacts.  
+- **Coverage goals:** Strive for high coverage in `internal/...` packages; add tests for new code paths.  
+
+---
+
+## Viewing the Metrics 
+
+To view the metrics published by the solution please follow the steps below.  
+
+1.   **Navigate to Cloudwatch**
+
+From the homepage of the your AWS console click CloudWatch. 
+
+![hompeage](../../media/awsconsolehome.png)
+
+2.  **Navigate to Metric Tab**
+
+Next, click the `All Metrics` tabs on the left side of the screen.  You should know see namespaces.  On the top should be custom namespaces where you'll see `Resource Quota Utilization` (if you kept our default namespace name.  If not, navigate to the custom namespace that you created.)
+
+![metrics](../../media/metricspage.png)
+
+3. **Viewing the metrics**
+
+![viewing metrics](../../media/namespace.png)
+You should now see namespaces:
+
+- `vpc` 
+  - contain `NetworkAddressUsageUtilization` metric
+
+  ![vpc metrics](../../media/vpcmetrics.png)
+
+
+- `Metrics with no dimensions`
+  - contains all other metrics
+
+![non dimensional metrics](../../media/metriclist.png)

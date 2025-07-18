@@ -31,7 +31,7 @@ Below is an example of invoker-level RequestPerSecond metric. Each invoker will 
 
 This metric is useful for deeper analysis into where your consumption is coming from. 
 
-![invoker level rps metric](/media/invokermetric.png)
+![invoker level rps metric](/media/assumerolerps.png)
   
 
 ### Resource Quota Utilization
@@ -39,15 +39,22 @@ A scheduled Lambda function that computes resource utilization across your accou
 
 **Use Case:** Valuable for dynamically generating utilization metrics which help prevent resource exhaustion. This is mainly a key concern for larger customers or ISVs who need proactive monitoring to avoid hitting service limits.
 
-This project captures utilization metrics for resources that do not have native CloudWatch coverage.
+This project captures utilization metrics for resources that do not have native CloudWatch coverage.  Below is a screenshot of what the metrics will look like in your namespace
 
-Currently supported metrics (with plans to continuously add more based on customer feedback):
-- Total network interfaces per region
-- VPC NAU (Network Address Units)
-- Total GP3 storage
-- Total OIDC providers
-- Total EKS clusters
-- Total IAM roles
+![metric list](media/metriclist.png)
+
+![vpc metrics](media/vpcmetrics.png)
+
+Below are the the current supported utilization metrics (with plans to continuously add more based on customer feedback):
+
+- EKS clusters
+- GP3 Storage
+- IAM Roles
+- Network Interfaces
+- OIDC Providers
+- Network Address Units (vpc level)
+
+Error Count is a metric that is auto created and will enable you to build notification workflows if there are any errors in the solution execution. 
 
 ---
 ## Repo Folder Structure
