@@ -53,10 +53,10 @@ The Rate Limit Solution:
 
 ### Available Metrics (out of the box)
 
-| Service | Metric Name                  | Description                                        | Recommended Alarm Threshold |
-|---------|------------------------------|----------------------------------------------------|------------------------|
-| STS     | AssumeRoleRequestPerSecond   | API calls per second for AssumeRole                | 100 RPS               |
-| STS     | AssumeRoleWithWebIdentityRequestPerSecond | API calls per second for AssumeRoleWithWebIdentity | 100 RPS               |
+| Service | Metric Name                  | Description                                        |
+|---------|------------------------------|----------------------------------------------------|
+| STS     | AssumeRoleRequestPerSecond   | API calls per second for AssumeRole                |
+| STS     | AssumeRoleWithWebIdentityRequestPerSecond | API calls per second for AssumeRoleWithWebIdentity | 
 
 When `PROPAGATE_INVOKER=true`, additional per-invoker metrics are generated with the invoker ARN as a dimension.
 
