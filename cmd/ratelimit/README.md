@@ -345,7 +345,11 @@ Next, click the `All Metrics` tabs on the left side of the screen.  You should k
 You should now see namespaces: 
 - `eventName, invoker`
    - contain invoker level metrics
+   ![invoker](../../media/assumerolerps.png)
+
 - `eventName`
    - contain overall api level metrics
+   ![overall rps](../../media/apimetric.png)
 - `Metrics with no dimensions`
    - ErrorCount auto created metric whenever the solution has an error in processing
+   ![error](../../media/error%20metric.png)
